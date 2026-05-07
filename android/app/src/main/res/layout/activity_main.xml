@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FrameLayout：WebView 与启动遮罩叠加。
+  splashOverlay 覆盖在 WebView 上方，颜色与 App 背景色一致（#0d1117），
+  等 React 首屏就绪后由 MainActivity 通过动画淡出，消除初始化闪烁。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <WebView
+        android:id="@+id/webView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 启动遮罩：与 App 深色背景同色，屏蔽 WebView 初始化白屏/闪烁 -->
+    <View
+        android:id="@+id/splashOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#0d1117" />
+
+</FrameLayout>
+
