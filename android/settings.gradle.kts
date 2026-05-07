@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "GitHubManager"
+rootProject.name = "GitHubM"
 include(":app")

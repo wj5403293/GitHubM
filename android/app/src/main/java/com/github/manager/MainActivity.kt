@@ -33,6 +33,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : AppCompatActivity() {
 
@@ -83,22 +85,17 @@ class MainActivity : AppCompatActivity() {
     // ── 按需权限：写存储（仅 API 26–28） ───────────────────────────
     private var pendingDownloadUrl: String = ""
     private var pendingDownloadFileName: String = ""
-    private var pendingDownloadUserAgent: String = ""
     private var pendingDownloadToken: String = ""
 
     private val writeStoragePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            startAuthenticatedDownload(
-                pendingDownloadUrl, pendingDownloadFileName,
-                pendingDownloadUserAgent, pendingDownloadToken
-            )
+            resolveAndDownload(pendingDownloadUrl, pendingDownloadFileName, pendingDownloadToken)
         } else {
             Toast.makeText(this, "存储权限被拒绝，无法保存文件", Toast.LENGTH_LONG).show()
         }
-        pendingDownloadUrl = ""; pendingDownloadFileName = ""
-        pendingDownloadUserAgent = ""; pendingDownloadToken = ""
+        pendingDownloadUrl = ""; pendingDownloadFileName = ""; pendingDownloadToken = ""
     }
 
     // ── 下载完成广播 ────────────────────────────────────────────────
@@ -118,22 +115,27 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * ArtifactsPage 调用：传原始 GitHub URL + token，由 DownloadManager 带认证下载。
+         * ArtifactsPage 调用：传原始 GitHub URL + token，由原生完成"解析重定向 → 下载"流程。
+         *
+         * GitHub 所有下载链接（releases/archive/artifacts）均会 302 重定向到
+         * S3/CDN 预签名 URL。直接把 Authorization header 转发给预签名 URL 会
+         * 触发 S3 签名冲突，导致下载失败。此方法先解析最终 URL 再下载，避免此问题。
+         *
          * 调用：window.AndroidBridge.downloadFile(url, fileName, token)
          */
         @JavascriptInterface
         fun downloadFile(url: String, fileName: String, token: String) {
             runOnUiThread {
-                checkStoragePermissionAndDownload(url, fileName, "GitHub Manager Android", token)
+                checkStoragePermissionAndDownload(url, fileName, token)
             }
         }
 
         /**
          * ExportPage 调用：传内存文本内容（Base64 编码），由原生写入「下载」文件夹。
-         * 调用：window.AndroidBridge.saveBlobData(fileName, mimeType, base64Content)
+         * 适用于 JSON/CSV 导出等纯文本内容，不经过 DownloadManager。
          *
-         * 此方法运行在 JavascriptInterface 后台线程，文件 I/O 在此线程完成，
-         * Toast 切回主线程显示。
+         * 调用：window.AndroidBridge.saveBlobData(fileName, mimeType, base64Content)
+         * 此方法运行在 JavascriptInterface 后台线程。
          */
         @JavascriptInterface
         fun saveBlobData(fileName: String, mimeType: String, base64Content: String) {
@@ -143,8 +145,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 return
             }
-
-            // API 26–28：先检查写存储权限
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 val granted = checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
                     PackageManager.PERMISSION_GRANTED
@@ -155,7 +155,6 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
             }
-
             runCatching {
                 val bytes = Base64.decode(base64Content, Base64.DEFAULT)
                 val savedName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -178,7 +177,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** API 29+：通过 MediaStore.Downloads 写文件（无需存储权限） */
+    // ── MediaStore / Legacy 存储写入 ────────────────────────────────
+
     private fun saveToMediaStore(bytes: ByteArray, fileName: String, mimeType: String): String {
         val effectiveMime = mimeType.ifBlank { "application/octet-stream" }.substringBefore(";")
         val cv = ContentValues().apply {
@@ -196,7 +196,6 @@ class MainActivity : AppCompatActivity() {
         return fileName
     }
 
-    /** API 26–28：通过 File API 写入公共 Downloads 目录 */
     private fun saveToLegacyStorage(bytes: ByteArray, fileName: String): String {
         val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         dir.mkdirs()
@@ -345,23 +344,17 @@ class MainActivity : AppCompatActivity() {
      *
      * 两种场景：
      * 1. blob: URL（安全网）——前端通常已通过 AndroidBridge 处理，此处作为兜底。
-     *    通过 JS fetch + FileReader 将 blob 内容以 Base64 传给 saveBlobData。
-     *    注意：若前端已调用 URL.revokeObjectURL，此时 blob URL 已失效，fetch 会失败，
-     *    但前端代码检测到 AndroidBridge 后会跳过 blob 创建，不会走到这里。
-     *
-     * 2. https: URL ——从 localStorage 读取 GitHub token，通过 DownloadManager 带认证下载。
+     * 2. https: URL——从 localStorage 读取 token，走"解析重定向 → DownloadManager"流程。
      */
     private fun setupDownloadListener() {
-        webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+        webView.setDownloadListener { url, _, contentDisposition, mimetype, _ ->
             val fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
 
             if (url.startsWith("blob:")) {
-                // ── blob: URL 安全网 ──────────────────────────────────
-                // 以单引号转义 URL 和文件名，防止 JS 注入
+                // blob: URL 安全网：通过 JS 读内容再传给 saveBlobData
                 val safeUrl = url.replace("\\", "\\\\").replace("'", "\\'")
                 val safeName = fileName.replace("\\", "\\\\").replace("'", "\\'")
                 val safeMime = mimetype.replace("\\", "\\\\").replace("'", "\\'")
-
                 val js = """
                     (function(){
                         fetch('$safeUrl')
@@ -384,53 +377,100 @@ class MainActivity : AppCompatActivity() {
                 return@setDownloadListener
             }
 
-            // ── https: URL ────────────────────────────────────────────
-            // 从 localStorage 读取 GitHub token，注入 Authorization header
+            // https: URL：读取 token 后解析重定向再下载
             webView.evaluateJavascript(
                 "(function(){ try { return localStorage.getItem('github_manager_token') || '' } catch(e){ return '' } })()"
             ) { result ->
                 val token = result?.removeSurrounding("\"")?.trim() ?: ""
-                checkStoragePermissionAndDownload(url, fileName, userAgent, token)
+                checkStoragePermissionAndDownload(url, fileName, token)
             }
         }
     }
 
     // ── 下载流程 ────────────────────────────────────────────────────
 
-    private fun checkStoragePermissionAndDownload(
-        url: String,
-        fileName: String,
-        userAgent: String,
-        token: String,
-    ) {
+    private fun checkStoragePermissionAndDownload(url: String, fileName: String, token: String) {
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
             val granted = checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
                 PackageManager.PERMISSION_GRANTED
             if (!granted) {
                 pendingDownloadUrl = url
                 pendingDownloadFileName = fileName
-                pendingDownloadUserAgent = userAgent
                 pendingDownloadToken = token
                 writeStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                 return
             }
         }
-        startAuthenticatedDownload(url, fileName, userAgent, token)
+        resolveAndDownload(url, fileName, token)
     }
 
-    private fun startAuthenticatedDownload(
-        url: String,
-        fileName: String,
-        userAgent: String,
-        token: String,
-    ) {
+    /**
+     * 核心修复：先在后台线程解析 GitHub 下载链接的最终 URL，再交给 DownloadManager。
+     *
+     * 问题根因：
+     *   GitHub 所有下载端点（browser_download_url / zipball / tarball / archive_download_url）
+     *   均会返回 302 重定向到 AWS S3 或 CDN 的预签名 URL。
+     *   DownloadManager 默认跟随重定向并转发所有自定义请求头，
+     *   将 Authorization header 发送给 S3 预签名 URL 会触发签名冲突（403 SignatureDoesNotMatch），
+     *   下载任务立刻失败——这就是"有通知但下载失败"的原因。
+     *
+     * 修复逻辑：
+     *   1. 用 HttpURLConnection（禁止自动重定向）向原始 URL 发一次带 auth 的请求
+     *   2. 若收到 3xx：取出 Location 头，用该预签名 URL 给 DownloadManager（不带 auth）
+     *   3. 若收到 200（无重定向）：直接下载，携带 auth
+     *   4. 若发生异常：回退到原始 URL + auth（降级处理）
+     */
+    private fun resolveAndDownload(url: String, fileName: String, token: String) {
+        Toast.makeText(this, "准备下载：$fileName", Toast.LENGTH_SHORT).show()
+
+        Thread {
+            runCatching {
+                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
+                    setRequestProperty("User-Agent", "GitHub Manager Android")
+                    setRequestProperty("Accept", "application/octet-stream")
+                    instanceFollowRedirects = false   // 手动处理重定向，避免 auth 头泄露给 S3
+                    requestMethod = "GET"
+                    connectTimeout = 15_000
+                    readTimeout = 5_000
+                }
+                conn.connect()
+                val code = conn.responseCode
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+
+                when {
+                    code in 300..399 && !location.isNullOrBlank() -> {
+                        // GitHub → 重定向到预签名 URL，不携带 auth（预签名 URL 已含鉴权参数）
+                        runOnUiThread { enqueueDownload(location, fileName, token = "") }
+                    }
+                    code == 200 -> {
+                        // 直链，无重定向，携带 auth
+                        runOnUiThread { enqueueDownload(url, fileName, token) }
+                    }
+                    else -> {
+                        runOnUiThread {
+                            Toast.makeText(
+                                this, "下载准备失败（HTTP $code）", Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            }.onFailure {
+                // 网络异常等：直接尝试（DownloadManager 自行处理）
+                runOnUiThread { enqueueDownload(url, fileName, token) }
+            }
+        }.start()
+    }
+
+    /** 将最终 URL 提交给 DownloadManager，token 为空时不发送 Authorization header */
+    private fun enqueueDownload(url: String, fileName: String, token: String) {
         runCatching {
             val request = DownloadManager.Request(Uri.parse(url)).apply {
                 if (token.isNotBlank()) {
-                    addRequestHeader("Authorization", "token $token")
+                    addRequestHeader("Authorization", "Bearer $token")
                 }
-                addRequestHeader("User-Agent", userAgent)
-                addRequestHeader("Accept", "application/octet-stream")
+                addRequestHeader("User-Agent", "GitHub Manager Android")
                 setTitle(fileName)
                 setDescription("正在从 GitHub 下载：$fileName")
                 setNotificationVisibility(
@@ -442,7 +482,6 @@ class MainActivity : AppCompatActivity() {
             }
             val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
             dm.enqueue(request)
-            Toast.makeText(this, "开始下载：$fileName", Toast.LENGTH_SHORT).show()
         }.onFailure { e ->
             Toast.makeText(this, "下载失败：${e.message}", Toast.LENGTH_SHORT).show()
         }
