@@ -428,7 +428,10 @@ class MainActivity : AppCompatActivity() {
                 val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
                     setRequestProperty("User-Agent", "GitHub Manager Android")
-                    setRequestProperty("Accept", "application/octet-stream")
+                    // ⚠️ 不设置 Accept 头：
+                    //   GitHub API 端点（api.github.com）仅接受 application/vnd.github+json，
+                    //   发送 application/octet-stream 会触发 415 Unsupported Media Type。
+                    //   此步骤只需要拿到 Location 头完成重定向解析，无需指定内容类型。
                     instanceFollowRedirects = false   // 手动处理重定向，避免 auth 头泄露给 S3
                     requestMethod = "GET"
                     connectTimeout = 15_000
@@ -471,6 +474,7 @@ class MainActivity : AppCompatActivity() {
                     addRequestHeader("Authorization", "Bearer $token")
                 }
                 addRequestHeader("User-Agent", "GitHub Manager Android")
+                // 不设置 Accept 头：S3/CDN 预签名 URL 不需要，设置反而可能引发问题
                 setTitle(fileName)
                 setDescription("正在从 GitHub 下载：$fileName")
                 setNotificationVisibility(
