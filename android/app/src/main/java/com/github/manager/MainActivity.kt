@@ -133,6 +133,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
+         * 主题切换时由 ThemeContext 调用，同步更新原生状态栏与底部导航栏外观。
+         *
+         * 调用：window.AndroidBridge.notifyTheme(isDark: boolean)
+         * @param isDark true = 深色主题，false = 浅色主题
+         */
+        @JavascriptInterface
+        fun notifyTheme(isDark: Boolean) {
+            runOnUiThread { applyNativeTheme(isDark) }
+        }
+
+        /**
          * ArtifactsPage 调用：传原始 GitHub URL + token，由原生完成"解析重定向 → 下载"流程。
          *
          * GitHub 所有下载链接（releases/archive/artifacts）均会 302 重定向到
@@ -338,6 +349,24 @@ class MainActivity : AppCompatActivity() {
                 val hash = url?.substringAfter("#", "") ?: return
                 val path = if (hash.startsWith("/")) hash else "/$hash"
                 syncBottomNavSelection(path)
+
+                // 首次加载完成后从 localStorage 读取主题并同步原生颜色
+                // github_manager_theme 是 ThemeContext 使用的 key
+                view?.evaluateJavascript(
+                    "(function(){ return localStorage.getItem('github_manager_theme') || 'dark'; })()"
+                ) { result ->
+                    val raw = result?.trim('"') ?: "dark"
+                    val resolved = when (raw) {
+                        "light" -> false
+                        "dark"  -> true
+                        else    -> { // system
+                            val nightMode = resources.configuration.uiMode and
+                                android.content.res.Configuration.UI_MODE_NIGHT_MASK
+                            nightMode == android.content.res.Configuration.UI_MODE_NIGHT_YES
+                        }
+                    }
+                    runOnUiThread { applyNativeTheme(resolved) }
+                }
             }
         }
     }
@@ -381,6 +410,86 @@ class MainActivity : AppCompatActivity() {
                 "(function(){ window.location.hash = '$safeHash'; })()", null
             )
             true
+        }
+    }
+
+    /**
+     * 根据 Web 端传来的主题信号，同步更新原生系统 UI 颜色：
+     *  - 状态栏背景色 & 图标颜色（深色主题用浅色图标，浅色主题用深色图标）
+     *  - 系统导航栏（手势条/按键条）背景色
+     *  - 底部导航栏背景色及图标/文字颜色
+     *
+     * 颜色值与 Web 端 index.css 的 HSL 变量保持一致：
+     *   深色：background=#111117，sidebar-background=#0d0d11
+     *   浅色：background=#f8f8fb，sidebar-background=#f6f4fa
+     */
+    private fun applyNativeTheme(isDark: Boolean) {
+        if (isDark) {
+            // ── 深色模式 ──────────────────────────────────────────────
+            val bgColor      = Color.parseColor("#111117")  // --background dark
+            val navBgColor   = Color.parseColor("#0d0d11")  // --sidebar-background dark
+            val selectedColor   = Color.parseColor("#8B4CF8")  // --primary dark
+            val unselectedColor = Color.parseColor("#9292A8")  // --muted-foreground dark
+
+            window.statusBarColor     = bgColor
+            window.navigationBarColor = navBgColor
+            bottomNav.setBackgroundColor(navBgColor)
+
+            // 状态栏图标 → 浅色（白色）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.setSystemBarsAppearance(
+                    0,
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
+                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and
+                    View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+            }
+
+            // 底部导航栏图标与文字颜色
+            val iconColors = android.content.res.ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(selectedColor, unselectedColor)
+            )
+            bottomNav.itemIconTintList = iconColors
+            bottomNav.itemTextColor   = iconColors
+
+        } else {
+            // ── 浅色模式 ──────────────────────────────────────────────
+            val bgColor      = Color.parseColor("#f8f8fb")  // --background light
+            val navBgColor   = Color.parseColor("#f6f4fa")  // --sidebar-background light
+            val selectedColor   = Color.parseColor("#7c3aed")  // --primary light
+            val unselectedColor = Color.parseColor("#64748b")  // 深灰，在浅色背景上可读
+
+            window.statusBarColor     = bgColor
+            window.navigationBarColor = navBgColor
+            bottomNav.setBackgroundColor(navBgColor)
+
+            // 状态栏图标 → 深色（黑色）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.setSystemBarsAppearance(
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = window.decorView.systemUiVisibility or
+                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or
+                    View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            }
+
+            // 底部导航栏图标与文字颜色
+            val iconColors = android.content.res.ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(selectedColor, unselectedColor)
+            )
+            bottomNav.itemIconTintList = iconColors
+            bottomNav.itemTextColor   = iconColors
         }
     }
 

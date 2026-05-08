@@ -88,35 +88,42 @@ export default function SettingsPage() {
       {user && (
         <div className="bg-card border border-border rounded-xl p-5">
           <h2 className="text-sm font-semibold text-foreground mb-4">账号信息</h2>
-          <div className="flex items-center gap-4">
-            <Avatar className="w-14 h-14 shrink-0">
-              <AvatarImage src={user.avatar_url} alt={user.login} />
-              <AvatarFallback className="bg-secondary text-lg font-bold">
-                {user.login.substring(0, 2).toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-foreground">{user.name || user.login}</span>
-                <Badge variant="outline" className="border-primary/50 text-primary text-xs">已认证</Badge>
+          {/* 移动端：竖向堆叠；桌面端：横向一行 */}
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+            {/* 头像 + 用户名/邮箱行 */}
+            <div className="flex items-center gap-3 min-w-0">
+              <Avatar className="w-14 h-14 shrink-0">
+                <AvatarImage src={user.avatar_url} alt={user.login} />
+                <AvatarFallback className="bg-secondary text-lg font-bold">
+                  {user.login.substring(0, 2).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-foreground truncate max-w-[160px]">{user.name || user.login}</span>
+                  <Badge variant="outline" className="border-primary/50 text-primary text-xs shrink-0">已认证</Badge>
+                </div>
+                <p className="text-sm text-muted-foreground truncate">@{user.login}</p>
+                {user.email && <p className="text-xs text-muted-foreground truncate mt-0.5">{user.email}</p>}
               </div>
-              <p className="text-sm text-muted-foreground">@{user.login}</p>
-              {user.email && <p className="text-xs text-muted-foreground mt-0.5">{user.email}</p>}
-              <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
+            </div>
+            {/* 统计数字 + 查看主页按钮：移动端一行两端对齐；桌面端按钮推到右侧 */}
+            <div className="flex items-center justify-between gap-3 md:contents">
+              <div className="flex gap-3 text-xs text-muted-foreground">
                 <span>{user.public_repos} 个仓库</span>
                 <span>{user.followers} 关注者</span>
               </div>
+              <a
+                href={user.html_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 md:ml-auto"
+              >
+                <Button variant="outline" size="sm" className="border-border hover:bg-secondary text-xs">
+                  查看主页
+                </Button>
+              </a>
             </div>
-            <a
-              href={user.html_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shrink-0"
-            >
-              <Button variant="outline" size="sm" className="border-border hover:bg-secondary text-xs">
-                查看主页
-              </Button>
-            </a>
           </div>
         </div>
       )}

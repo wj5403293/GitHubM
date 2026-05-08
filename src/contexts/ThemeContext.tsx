@@ -27,7 +27,23 @@ function applyTheme(mode: ThemeMode) {
     html.classList.add('light');
     html.classList.remove('dark');
   }
+  // 通知 APK 壳同步更新状态栏与底部导航栏颜色
+  notifyAndroidTheme(resolved === 'dark');
   return resolved;
+}
+
+/**
+ * 向 Android 原生层推送主题变化。
+ * AndroidBridge 由 MainActivity 的 addJavascriptInterface 注入，
+ * 纯浏览器环境中不存在，通过可选链安全调用。
+ */
+function notifyAndroidTheme(isDark: boolean) {
+  try {
+    (window as unknown as { AndroidBridge?: { notifyTheme?: (d: boolean) => void } })
+      .AndroidBridge?.notifyTheme?.(isDark);
+  } catch {
+    // 非 APK 环境或旧版本壳，静默忽略
+  }
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
