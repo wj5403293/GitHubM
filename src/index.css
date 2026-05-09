@@ -172,10 +172,22 @@
   *:focus {
     outline: none;
   }
-  /* 键盘导航时仍保留可见焦点环，使用设计系统 ring 颜色 */
-  *:focus-visible {
+  /*
+   * 键盘导航焦点环：仅对非按钮元素（如链接、输入框等）应用全局规则。
+   * Button / [role="button"] 由 shadcn 组件自身的 focus-visible 类管理，
+   * 此处不额外覆盖，避免鼠标/触摸点击后在 Android WebView 中留下残影边框。
+   */
+  *:focus-visible:not(button):not([role="button"]):not(a) {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
+  }
+  /* 消除 Android WebView 点击高亮（蓝/灰色半透明遮罩） */
+  button, [role="button"], a, input, select, textarea {
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* 按钮点击后不保留焦点环（shadcn ring 只在键盘导航时由 :focus-visible 触发）*/
+  button:focus-visible, [role="button"]:focus-visible {
+    outline: none;
   }
 
   /*

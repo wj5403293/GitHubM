@@ -22,9 +22,6 @@ import {
   MessageCircle,
   Clock,
   Shield,
-  Sparkles,
-  Loader2,
-  Lightbulb,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -62,7 +59,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { useAiSummary, useAiSuggestions } from '@/hooks/useAiAssist';
 
 /** Review 状态图标与颜色 */
 function ReviewStateIcon({ state }: { state: GQL_PRReview['state'] }) {
@@ -140,11 +136,6 @@ export default function PullDetailPage() {
   const [reviewDecision, setReviewDecision] = useState<GQL_ReviewDecision | null>(null);
   const [requestedReviewers, setRequestedReviewers] = useState<Array<{ login: string; avatarUrl: string }>>([]);
   const [reviewsLoading, setReviewsLoading] = useState(true);
-
-  // AI 功能
-  const aiSummary = useAiSummary();
-  const aiSuggestions = useAiSuggestions();
-  const [showAiPanel, setShowAiPanel] = useState(false);
 
   useEffect(() => {
     if (!owner || !repo || !number) return;
@@ -320,104 +311,7 @@ export default function PullDetailPage() {
           <FileDiff className="w-3.5 h-3.5" />
           查看 Diff
         </Button>
-        {/* AI 功能按钮 */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className={`h-9 gap-1.5 border text-xs transition-colors ${showAiPanel ? 'border-primary text-primary bg-primary/10' : 'border-border text-muted-foreground hover:bg-secondary'}`}
-          onClick={() => {
-            setShowAiPanel(!showAiPanel);
-            if (!showAiPanel && pr && !aiSummary.summary && !aiSummary.loading) {
-              const ctx = `PR 标题：${pr.title}\n描述：${pr.body || '（无描述）'}`;
-              aiSummary.generate(ctx).catch(() => toast.error('AI 摘要生成失败'));
-            }
-          }}
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          AI 辅助
-        </Button>
       </div>
-
-      {/* AI 辅助面板 */}
-      {showAiPanel && (
-        <div className="bg-card border border-primary/30 rounded-lg p-4 space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Sparkles className="w-4 h-4 text-primary" />
-            AI 辅助
-          </div>
-          {/* AI 摘要 */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground font-medium">内容摘要</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs text-primary hover:bg-primary/10 gap-1"
-                onClick={() => {
-                  const ctx = `PR 标题：${pr.title}\n描述：${pr.body || '（无描述）'}`;
-                  aiSummary.generate(ctx).catch(() => toast.error('AI 摘要生成失败'));
-                }}
-                disabled={aiSummary.loading}
-              >
-                {aiSummary.loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                {aiSummary.loading ? '生成中...' : '重新生成'}
-              </Button>
-            </div>
-            <div className="bg-secondary/60 rounded-lg px-3 py-2 min-h-10 text-sm text-foreground">
-              {aiSummary.loading && !aiSummary.summary
-                ? <span className="text-muted-foreground italic flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />正在生成摘要...</span>
-                : aiSummary.summary
-                  ? aiSummary.summary
-                  : <span className="text-muted-foreground italic">点击"重新生成"生成 AI 摘要</span>
-              }
-            </div>
-          </div>
-          {/* AI 回复建议 */}
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground font-medium">回复建议</span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 text-xs text-primary hover:bg-primary/10 gap-1"
-                onClick={() => {
-                  const ctx = `PR 标题：${pr.title}\n描述：${pr.body || '（无描述）'}`;
-                  aiSuggestions.generate(ctx).catch(() => toast.error('AI 建议生成失败'));
-                }}
-                disabled={aiSuggestions.loading}
-              >
-                {aiSuggestions.loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lightbulb className="w-3 h-3" />}
-                {aiSuggestions.loading ? '生成中...' : '生成建议'}
-              </Button>
-            </div>
-            {aiSuggestions.suggestions.length > 0 ? (
-              <div className="space-y-1.5">
-                {aiSuggestions.suggestions.map((s, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    className="w-full text-left bg-secondary/60 hover:bg-secondary rounded-lg px-3 py-2 text-sm text-foreground transition-colors border border-transparent hover:border-border"
-                    onClick={() => setNewComment(s)}
-                    title="点击填入评论框"
-                  >
-                    <span className="text-primary font-medium mr-1.5">{i + 1}.</span>
-                    {s}
-                  </button>
-                ))}
-                <p className="text-[10px] text-muted-foreground pl-1">点击建议可自动填入评论框</p>
-              </div>
-            ) : aiSuggestions.loading ? (
-              <div className="bg-secondary/60 rounded-lg px-3 py-2 text-sm text-muted-foreground italic flex items-center gap-1.5">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />正在生成回复建议...
-              </div>
-            ) : (
-              <div className="bg-secondary/60 rounded-lg px-3 py-2 text-sm text-muted-foreground italic">
-                点击"生成建议"获取 AI 回复候选
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* GraphQL：Review Decision 横幅 */}
       {!reviewsLoading && <ReviewDecisionBanner decision={reviewDecision} />}
