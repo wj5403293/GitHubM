@@ -2,26 +2,23 @@
 # 推送到 main 分支时：
 #   1. 构建 Web 应用（dist/）
 #   2. 部署到 GitHub Pages
-#   3. 打包 Android APK（WebView 壳 + dist/ 资源）
+#   3. 打包 Android APK（签名 + 自动发布到 Release）
 name: Deploy & Build APK
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: # 支持手动触发
+  workflow_dispatch:
 
-# GITHUB_TOKEN 权限：Pages 部署需要 pages + id-token
 permissions:
-  contents: read
+  contents: write   # 创建 Release 需要
   pages: write
   id-token: write
 
-# 同组并发：新部署取消旧部署（仅影响 Pages，APK 构建不受影响）
 concurrency:
   group: pages
   cancel-in-progress: true
 
-# ─────────────────────────────────────────────────────────────────
 jobs:
 
   # ── Job 1：构建 Web 应用 ───────────────────────────────────────
@@ -29,19 +26,13 @@ jobs:
     name: 构建 Web 应用
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 9
-          # pnpm/action-setup 自身处理 store 缓存；
-          # 不在 setup-node 中配 cache: pnpm，
-          # 避免首次提交时 lockfile 不存在导致步骤失败
 
-      - name: 设置 Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
@@ -51,18 +42,15 @@ jobs:
       - name: 构建 Web 应用
         run: pnpm exec vite build
 
-      - name: 上传 Web 构建产物（供后续 Job 使用）
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: web-dist
           path: dist
-          retention-days: 1   # 仅在本次 workflow 期间保留
+          retention-days: 1
 
-      - name: 配置 GitHub Pages
-        uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v5
 
-      - name: 上传 Pages 产物
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
@@ -75,58 +63,106 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: 部署到 GitHub Pages
+      - uses: actions/deploy-pages@v4
         id: deployment
-        uses: actions/deploy-pages@v4
 
-  # ── Job 3：构建 Android APK ────────────────────────────────────
+  # ── Job 3：构建 Android APK + 自动发布 Release ─────────────────
   build-apk:
-    name: 构建 Android APK
+    name: 构建 APK & 发布 Release
     needs: build-web
     runs-on: ubuntu-latest
+    outputs:
+      version_name: ${{ steps.version.outputs.name }}
     steps:
-      - name: 检出代码（含 android/ 项目源码）
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 下载 Web 构建产物
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: web-dist
           path: dist
 
-      - name: 将 Web 资源复制到 Android assets
+      - name: 生成版本号
+        id: version
+        run: |
+          # 格式：YYYY.MM.DD-rc{N} ，如 2026.05.08-rc30
+          VNAME="$(date +'%Y.%m.%d')-rc${{ github.run_number }}"
+          VCODE="${{ github.run_number }}"
+          echo "name=${VNAME}" >> $GITHUB_OUTPUT
+          echo "code=${VCODE}" >> $GITHUB_OUTPUT
+          echo "VERSION: ${VNAME} (code=${VCODE})"
+
+      - name: 生成签名密钥（固定参数确保覆盖安装一致性）
+        run: |
+          keytool -genkey -v \
+            -keystore android/ci-release.keystore \
+            -alias github-manager \
+            -keyalg RSA -keysize 2048 -validity 36500 \
+            -storepass github-manager \
+            -keypass github-manager \
+            -dname "CN=GitHub Manager, OU=CI, O=GitHubM, L=Earth, ST=Internet, C=XX"
+
+      - name: 复制 Web 资源到 Android assets
         run: |
           mkdir -p android/app/src/main/assets
           cp -r dist/. android/app/src/main/assets/
 
-      - name: 设置 JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 设置 Gradle 8.7
-        uses: gradle/actions/setup-gradle@v3
+      - uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.7'
-          # 缓存 Gradle 依赖，加快后续构建
           cache-read-only: false
 
-      - name: 生成 local.properties（指向预装 Android SDK）
+      - name: 生成 local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: 接受 Android SDK 许可证
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
 
-      - name: 构建 Debug APK
+      - name: 构建签名 Debug APK
         working-directory: android
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          KEYSTORE_PASSWORD: github-manager
+          KEY_ALIAS: github-manager
+          KEY_PASSWORD: github-manager
         run: gradle assembleDebug --no-daemon
 
-      - name: 上传 APK 产物
+      - name: 重命名 APK（含版本号）
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             github-manager-${{ steps.version.outputs.name }}.apk
+
+      - name: 上传 APK artifact（保留 30 天）
         uses: actions/upload-artifact@v4
         with:
           name: github-manager-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: github-manager-${{ steps.version.outputs.name }}.apk
           retention-days: 30
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.name }}
+          name: v${{ steps.version.outputs.name }} - GitHub Manager
+          body: |
+            ## GitHub Manager v${{ steps.version.outputs.name }}
+
+            🤖 自动构建版本，基于 [commit ${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+
+            ### 📱 下载
+            点击下方 APK 安装包下载。
+
+            ### 📦 版本信息
+            - **Version Code**: ${{ steps.version.outputs.code }}
+            - **Build**: CI #${{ github.run_number }}
+            - **Branch**: ${{ github.ref_name }}
+          files: github-manager-${{ steps.version.outputs.name }}.apk
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
