@@ -15,6 +15,10 @@ interface AuthContextValue {
   switchAccount: (token: string) => Promise<void>;
   removeAccount: (token: string) => void;
   refreshRateLimit: () => Promise<void>;
+  /** 重新请求 /user 并刷新 user 状态 */
+  refreshUser: () => Promise<void>;
+  /** 用新的用户数据直接更新 state（避免额外网络请求） */
+  updateUser: (newUser: GitHubUser) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -92,6 +96,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  /** 重新请求 /user 刷新当前用户信息 */
+  const refreshUser = useCallback(async () => {
+    try {
+      const userData = await getCurrentUser();
+      setUser(userData);
+      // 同步更新 savedAccounts 中对应的用户快照
+      if (token) {
+        setSavedAccounts((prev) => {
+          const updated = prev.map((a) =>
+            a.token === token ? { ...a, user: userData } : a
+          );
+          saveAccounts(updated);
+          return updated;
+        });
+      }
+    } catch {
+      // 静默失败
+    }
+  }, [token]);
+
+  /** 直接用新数据更新 user state（保存 PATCH 后立即刷新 UI） */
+  const updateUser = useCallback((newUser: GitHubUser) => {
+    setUser(newUser);
+    if (token) {
+      setSavedAccounts((prev) => {
+        const updated = prev.map((a) =>
+          a.token === token ? { ...a, user: newUser } : a
+        );
+        saveAccounts(updated);
+        return updated;
+      });
+    }
+  }, [token]);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);
@@ -134,7 +172,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         token, user, isAuthenticated, rateLimit, loading,
-        savedAccounts, login, logout, switchAccount, removeAccount, refreshRateLimit,
+        savedAccounts, login, logout, switchAccount, removeAccount,
+        refreshRateLimit, refreshUser, updateUser,
       }}
     >
       {children}

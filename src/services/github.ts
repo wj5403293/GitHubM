@@ -1427,3 +1427,42 @@ export async function getFileInfo(
 export async function getRepoBranches(owner: string, repo: string): Promise<Array<{ name: string; commit: { sha: string } }>> {
   return request<Array<{ name: string; commit: { sha: string } }>>(`/repos/${owner}/${repo}/branches?per_page=100`);
 }
+
+/** 获取用户的粉丝列表（分页） */
+export async function getFollowers(
+  login: string,
+  page = 1,
+  per_page = 30
+): Promise<GitHubUser[]> {
+  return request<GitHubUser[]>(
+    `/users/${encodeURIComponent(login)}/followers?per_page=${per_page}&page=${page}`
+  );
+}
+
+/** 获取用户正在关注的列表（分页） */
+export async function getFollowing(
+  login: string,
+  page = 1,
+  per_page = 30
+): Promise<GitHubUser[]> {
+  return request<GitHubUser[]>(
+    `/users/${encodeURIComponent(login)}/following?per_page=${per_page}&page=${page}`
+  );
+}
+
+/** 更新当前登录用户的 Profile（PATCH /user） */
+export async function updateUserProfile(params: {
+  name?: string;
+  email?: string;
+  bio?: string;
+  company?: string;
+  location?: string;
+  blog?: string;
+  twitter_username?: string;
+}): Promise<GitHubUser> {
+  return request<GitHubUser>('/user', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}

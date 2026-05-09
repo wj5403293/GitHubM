@@ -292,51 +292,75 @@ export default function DashboardPage() {
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-6xl mx-auto">
       {/* 用户信息卡片 */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <div className="flex flex-col md:flex-row gap-4 items-start">
-          <Avatar className="w-16 h-16 shrink-0">
+      <div className="bg-card border border-border rounded-xl p-5">
+        {/* 顶部：头像 + 核心信息 */}
+        <div className="flex items-start gap-4">
+          <Avatar className="w-16 h-16 shrink-0 ring-2 ring-border">
             <AvatarImage src={user.avatar_url} alt={user.login} />
             <AvatarFallback className="bg-secondary text-secondary-foreground text-xl font-bold">
               {user.login.substring(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-bold text-foreground text-balance">{user.name || user.login}</h1>
-              <span className="text-muted-foreground text-sm">@{user.login}</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <h1 className="text-lg font-bold text-foreground text-balance leading-tight">
+                {user.name || user.login}
+              </h1>
+              <span className="text-sm text-muted-foreground truncate">@{user.login}</span>
             </div>
             {user.bio && (
-              <p className="text-sm text-muted-foreground mt-1 text-pretty">{user.bio}</p>
+              <p className="text-sm text-muted-foreground mt-1.5 text-pretty line-clamp-2">{user.bio}</p>
             )}
-            <div className="flex flex-wrap gap-4 mt-3">
+            {/* 位置 / 公司 / 博客 */}
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
               {user.company && (
-                <span className="text-xs text-muted-foreground">{user.company}</span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 shrink-0" />
+                  {user.company}
+                </span>
               )}
               {user.location && (
-                <span className="text-xs text-muted-foreground">{user.location}</span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 shrink-0" />
+                  {user.location}
+                </span>
               )}
               {user.blog && (
                 <a
                   href={user.blog.startsWith('http') ? user.blog : `https://${user.blog}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs text-accent hover:underline flex items-center gap-1"
+                  className="flex items-center gap-1 text-xs text-accent hover:underline"
                 >
-                  {user.blog}
-                  <ExternalLink className="w-3 h-3" />
+                  <ExternalLink className="w-3 h-3 shrink-0" />
+                  <span className="truncate max-w-[140px]">{user.blog}</span>
                 </a>
               )}
             </div>
+          </div>
+        </div>
+        {/* 底部：GitHub 主页按钮 */}
+        <div className="mt-4 pt-4 border-t border-border flex items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+            {user.twitter_username && (
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] font-bold text-muted-foreground/80">𝕏</span>
+                @{user.twitter_username}
+              </span>
+            )}
+            <span>
+              加入于 {new Date(user.created_at).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' })}
+            </span>
           </div>
           <a
             href={user.html_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 shrink-0 text-sm font-medium
-                       border border-border rounded-md px-3 h-9
-                       bg-background hover:bg-secondary transition-colors"
+            className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium
+                       border border-border rounded-lg px-3 h-8
+                       bg-background hover:bg-secondary transition-colors text-foreground"
           >
-            <ExternalLink className="w-4 h-4" />
+            <ExternalLink className="w-3.5 h-3.5" />
             GitHub 主页
           </a>
         </div>
@@ -345,22 +369,28 @@ export default function DashboardPage() {
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: '公开仓库', value: user.public_repos, icon: BookOpen, color: 'text-primary' },
-          { label: '关注者', value: user.followers, icon: Users, color: 'text-accent' },
-          { label: '正在关注', value: user.following, icon: Eye, color: 'text-chart-3' },
-          { label: '公开 Gist', value: user.public_gists, icon: TrendingUp, color: 'text-chart-4' },
+          { label: '公开仓库', value: user.public_repos, icon: BookOpen, color: 'text-primary', to: '/repos' },
+          { label: '关注者', value: user.followers, icon: Users, color: 'text-accent', to: '/follow-list/followers' },
+          { label: '正在关注', value: user.following, icon: Eye, color: 'text-chart-3', to: '/follow-list/following' },
+          { label: '公开 Gist', value: user.public_gists, icon: TrendingUp, color: 'text-chart-4', to: '/gists' },
         ].map((stat) => {
           const Icon = stat.icon;
           return (
-            <Card key={stat.label} className="bg-card border-border h-full">
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Icon className={`w-4 h-4 ${stat.color}`} />
-                  <span className="text-xs text-muted-foreground">{stat.label}</span>
-                </div>
-                <p className="text-2xl font-bold text-foreground">{formatNumber(stat.value)}</p>
-              </CardContent>
-            </Card>
+            <button
+              key={stat.label}
+              type="button"
+              className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:bg-secondary/40 active:scale-[0.98] transition-all group"
+              onClick={() => navigate(stat.to)}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Icon className={`w-4 h-4 ${stat.color}`} />
+                <span className="text-xs text-muted-foreground">{stat.label}</span>
+              </div>
+              <p className="text-2xl font-bold text-foreground">{formatNumber(stat.value)}</p>
+              <p className="text-xs text-muted-foreground mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                点击查看 →
+              </p>
+            </button>
           );
         })}
       </div>

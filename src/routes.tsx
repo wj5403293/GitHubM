@@ -28,6 +28,7 @@ import UploadPage from './pages/UploadPage';
 import PagesDeployPage from './pages/PagesDeployPage';
 import ArtifactsPage from './pages/ArtifactsPage';
 import GraphQLPlaygroundPage from './pages/GraphQLPlaygroundPage';
+import FollowListPage from './pages/FollowListPage';
 
 export interface RouteConfig {
   name: string;
@@ -66,6 +67,7 @@ export const routes: RouteConfig[] = [
   { name: '活动', path: '/activity', element: <ActivityPage /> },
   { name: 'Gists', path: '/gists', element: <GistsPage /> },
   { name: 'Gist 详情', path: '/gists/:gistId', element: <GistDetailPage /> },
+  { name: '关注列表', path: '/follow-list/:type', element: <FollowListPage /> },
   { name: 'Packages', path: '/packages', element: <PackagesPage /> },
   { name: '账号管理', path: '/accounts', element: <AccountsPage /> },
   { name: '数据导出', path: '/export', element: <ExportPage /> },

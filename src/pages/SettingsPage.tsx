@@ -13,10 +13,15 @@ import {
   Shield,
   Info,
   Monitor,
+  Pencil,
+  ExternalLink,
+  Loader2,
+  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
@@ -29,8 +34,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme, type ThemeMode } from '@/contexts/ThemeContext';
+import { updateUserProfile } from '@/services/github';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -41,6 +53,186 @@ const themeOptions: { value: ThemeMode; label: string; Icon: React.ComponentType
   { value: 'system', label: '跟随系统', Icon: Monitor },
 ];
 
+// ── 编辑资料 Dialog ──────────────────────────────────────────────────
+interface EditProfileDialogProps {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}
+
+function EditProfileDialog({ open, onOpenChange }: EditProfileDialogProps) {
+  const { user, updateUser } = useAuth();
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: user?.name || '',
+    bio: user?.bio || '',
+    company: user?.company || '',
+    location: user?.location || '',
+    blog: user?.blog || '',
+    twitter_username: user?.twitter_username || '',
+    email: user?.email || '',
+  });
+
+  const handleChange = (field: keyof typeof form) => (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // 只传非空字段，避免意外清空
+      const payload: Record<string, string> = {};
+      (Object.keys(form) as (keyof typeof form)[]).forEach((k) => {
+        if (form[k].trim() !== '') payload[k] = form[k].trim();
+        else payload[k] = ''; // 允许清空字段
+      });
+      const updated = await updateUserProfile(payload);
+      updateUser(updated);
+      toast.success('个人资料已更新');
+      onOpenChange(false);
+    } catch {
+      toast.error('更新失败，请检查 Token 是否具有 user 权限');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[calc(100%-2rem)] md:max-w-lg bg-card border-border max-h-[90dvh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-foreground flex items-center gap-2">
+            <User className="w-4 h-4 text-primary" />
+            编辑个人资料
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-5 pt-1">
+          {/* 头像区 */}
+          <div className="flex items-center gap-4 p-4 bg-secondary/40 rounded-xl border border-border">
+            <Avatar className="w-16 h-16 shrink-0 ring-2 ring-border">
+              <AvatarImage src={user?.avatar_url} alt={user?.login} />
+              <AvatarFallback className="bg-secondary text-lg font-bold">
+                {user?.login.substring(0, 2).toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">个人头像</p>
+              <p className="text-xs text-muted-foreground mt-0.5 text-pretty">
+                头像需前往 GitHub.com 更改，API 不支持直接上传。
+              </p>
+              <a
+                href="https://github.com/settings/profile"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-accent hover:underline mt-1.5"
+              >
+                <ExternalLink className="w-3 h-3" />
+                前往 GitHub 更改头像
+              </a>
+            </div>
+          </div>
+
+          {/* 表单字段 */}
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-sm font-normal text-foreground">显示名称</Label>
+                <Input
+                  value={form.name}
+                  onChange={handleChange('name')}
+                  placeholder="你的名字"
+                  className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm font-normal text-foreground">个人简介</Label>
+                <Textarea
+                  value={form.bio}
+                  onChange={handleChange('bio')}
+                  placeholder="简单介绍一下自己..."
+                  rows={3}
+                  className="bg-secondary border-border text-foreground placeholder:text-muted-foreground resize-none"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-normal text-foreground">公司 / 组织</Label>
+                  <Input
+                    value={form.company}
+                    onChange={handleChange('company')}
+                    placeholder="@YourCompany"
+                    className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-normal text-foreground">所在地</Label>
+                  <Input
+                    value={form.location}
+                    onChange={handleChange('location')}
+                    placeholder="城市, 国家"
+                    className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm font-normal text-foreground">个人网站</Label>
+                <Input
+                  value={form.blog}
+                  onChange={handleChange('blog')}
+                  placeholder="https://yourwebsite.com"
+                  className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-normal text-foreground">X (Twitter) 用户名</Label>
+                  <Input
+                    value={form.twitter_username}
+                    onChange={handleChange('twitter_username')}
+                    placeholder="your_handle（不含 @）"
+                    className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-normal text-foreground">公开邮箱</Label>
+                  <Input
+                    type="email"
+                    value={form.email}
+                    onChange={handleChange('email')}
+                    placeholder="you@example.com"
+                    className="bg-secondary border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 操作按钮 */}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button
+              variant="outline"
+              className="border-border hover:bg-secondary"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
+              取消
+            </Button>
+            <Button
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />保存中...</>
+              ) : '保存修改'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function SettingsPage() {
   const { user, rateLimit, logout, login, token, refreshRateLimit } = useAuth();
   const { theme: currentTheme, setTheme } = useTheme();
@@ -50,6 +242,7 @@ export default function SettingsPage() {
   const [showNewToken, setShowNewToken] = useState(false);
   const [updatingToken, setUpdatingToken] = useState(false);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const handleUpdateToken = async () => {
     if (!newToken.trim()) {
@@ -87,43 +280,106 @@ export default function SettingsPage() {
       {/* 用户信息 */}
       {user && (
         <div className="bg-card border border-border rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4">账号信息</h2>
-          {/* 移动端：竖向堆叠；桌面端：横向一行 */}
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
-            {/* 头像 + 用户名/邮箱行 */}
-            <div className="flex items-center gap-3 min-w-0">
-              <Avatar className="w-14 h-14 shrink-0">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-foreground">账号信息</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-border hover:bg-secondary text-xs h-8 gap-1.5"
+              onClick={() => setEditOpen(true)}
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              编辑资料
+            </Button>
+          </div>
+
+          {/* 头像 + 基本信息 */}
+          <div className="flex items-start gap-4">
+            <div className="relative shrink-0">
+              <Avatar className="w-16 h-16 ring-2 ring-border">
                 <AvatarImage src={user.avatar_url} alt={user.login} />
                 <AvatarFallback className="bg-secondary text-lg font-bold">
                   {user.login.substring(0, 2).toUpperCase()}
                 </AvatarFallback>
               </Avatar>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-foreground truncate max-w-[160px]">{user.name || user.login}</span>
-                  <Badge variant="outline" className="border-primary/50 text-primary text-xs shrink-0">已认证</Badge>
-                </div>
-                <p className="text-sm text-muted-foreground truncate">@{user.login}</p>
-                {user.email && <p className="text-xs text-muted-foreground truncate mt-0.5">{user.email}</p>}
-              </div>
             </div>
-            {/* 统计数字 + 查看主页按钮：移动端一行两端对齐；桌面端按钮推到右侧 */}
-            <div className="flex items-center justify-between gap-3 md:contents">
-              <div className="flex gap-3 text-xs text-muted-foreground">
-                <span>{user.public_repos} 个仓库</span>
-                <span>{user.followers} 关注者</span>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-foreground truncate max-w-[180px] text-base">
+                  {user.name || user.login}
+                </span>
+                <Badge variant="outline" className="border-primary/50 text-primary text-xs shrink-0">
+                  已认证
+                </Badge>
               </div>
-              <a
-                href={user.html_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="shrink-0 md:ml-auto"
+              <p className="text-sm text-muted-foreground">@{user.login}</p>
+              {user.bio && (
+                <p className="text-xs text-muted-foreground mt-1 text-pretty line-clamp-2">{user.bio}</p>
+              )}
+            </div>
+          </div>
+
+          {/* 详细信息网格 */}
+          <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-muted-foreground border-t border-border pt-4">
+            {user.email && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/60 w-14 shrink-0">邮箱</span>
+                <span className="truncate text-foreground/80">{user.email}</span>
+              </div>
+            )}
+            {user.company && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/60 w-14 shrink-0">公司</span>
+                <span className="truncate text-foreground/80">{user.company}</span>
+              </div>
+            )}
+            {user.location && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/60 w-14 shrink-0">地区</span>
+                <span className="truncate text-foreground/80">{user.location}</span>
+              </div>
+            )}
+            {user.blog && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/60 w-14 shrink-0">网站</span>
+                <a
+                  href={user.blog.startsWith('http') ? user.blog : `https://${user.blog}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent hover:underline truncate flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3 h-3 shrink-0" />
+                  {user.blog}
+                </a>
+              </div>
+            )}
+            {user.twitter_username && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground/60 w-14 shrink-0">X</span>
+                <span className="text-foreground/80">@{user.twitter_username}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-3 mt-1 pt-2 border-t border-border/60">
+              <span>{user.public_repos} 个公开仓库</span>
+              <span>·</span>
+              <span>{user.followers} 粉丝</span>
+              <span>·</span>
+              <span>关注 {user.following} 人</span>
+            </div>
+          </div>
+
+          {/* 查看 GitHub 主页 */}
+          <div className="mt-3">
+            <a href={user.html_url} target="_blank" rel="noopener noreferrer">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full border border-border text-muted-foreground hover:text-foreground hover:bg-secondary text-xs h-8 gap-1.5"
               >
-                <Button variant="outline" size="sm" className="border-border hover:bg-secondary text-xs">
-                  查看主页
-                </Button>
-              </a>
-            </div>
+                <ExternalLink className="w-3.5 h-3.5" />
+                查看 GitHub 主页
+              </Button>
+            </a>
           </div>
         </div>
       )}
@@ -317,6 +573,9 @@ export default function SettingsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 编辑资料 Dialog */}
+      {user && <EditProfileDialog open={editOpen} onOpenChange={setEditOpen} />}
     </div>
   );
 }
