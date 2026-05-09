@@ -12,6 +12,9 @@ import {
   X,
   Check,
   Tag,
+  Sparkles,
+  Loader2,
+  Lightbulb,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +32,7 @@ import type { GitHubIssue, GitHubComment } from '@/types/types';
 import MarkdownRenderer from '@/components/common/MarkdownRenderer';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { useAiSummary, useAiSuggestions } from '@/hooks/useAiAssist';
 
 export default function IssueDetailPage() {
   const { owner, repo, number } = useParams<{ owner: string; repo: string; number: string }>();
@@ -40,6 +44,11 @@ export default function IssueDetailPage() {
   const [newComment, setNewComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [toggling, setToggling] = useState(false);
+
+  // AI 功能
+  const aiSummary = useAiSummary();
+  const aiSuggestions = useAiSuggestions();
+  const [showAiPanel, setShowAiPanel] = useState(false);
 
   useEffect(() => {
     if (!owner || !repo || !number) return;
@@ -155,20 +164,37 @@ export default function IssueDetailPage() {
               </span>
             </div>
           </div>
-          {/* 状态切换 */}
-          <Button
-            variant="outline"
-            size="sm"
-            className={`shrink-0 border-border h-8 ${issue.state === 'open' ? 'text-foreground hover:bg-secondary' : 'text-primary hover:bg-secondary'}`}
-            onClick={handleToggleState}
-            disabled={toggling}
-          >
-            {issue.state === 'open' ? (
-              <><X className="w-3.5 h-3.5 mr-1" />关闭</>
-            ) : (
-              <><Check className="w-3.5 h-3.5 mr-1" />重新打开</>
-            )}
-          </Button>
+          {/* AI + 状态切换 */}
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`h-8 text-xs gap-1 border transition-colors ${showAiPanel ? 'border-primary text-primary bg-primary/10' : 'border-border text-muted-foreground hover:bg-secondary'}`}
+              onClick={() => {
+                setShowAiPanel(!showAiPanel);
+                if (!showAiPanel && issue && !aiSummary.summary && !aiSummary.loading) {
+                  const ctx = `Issue 标题：${issue.title}\n内容：${issue.body || '（无描述）'}`;
+                  aiSummary.generate(ctx).catch(() => toast.error('AI 摘要生成失败'));
+                }
+              }}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">AI</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className={`border-border h-8 ${issue.state === 'open' ? 'text-foreground hover:bg-secondary' : 'text-primary hover:bg-secondary'}`}
+              onClick={handleToggleState}
+              disabled={toggling}
+            >
+              {issue.state === 'open' ? (
+                <><X className="w-3.5 h-3.5 mr-1" />关闭</>
+              ) : (
+                <><Check className="w-3.5 h-3.5 mr-1" />重新打开</>
+              )}
+            </Button>
+          </div>
         </div>
 
         {/* 标签 */}
@@ -192,6 +218,87 @@ export default function IssueDetailPage() {
           </div>
         )}
       </div>
+
+      {/* AI 辅助面板 */}
+      {showAiPanel && (
+        <div className="bg-card border border-primary/30 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Sparkles className="w-4 h-4 text-primary" />
+            AI 辅助
+          </div>
+          {/* AI 摘要 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground font-medium">内容摘要</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-primary hover:bg-primary/10 gap-1"
+                onClick={() => {
+                  const ctx = `Issue 标题：${issue.title}\n内容：${issue.body || '（无描述）'}`;
+                  aiSummary.generate(ctx).catch(() => toast.error('AI 摘要生成失败'));
+                }}
+                disabled={aiSummary.loading}
+              >
+                {aiSummary.loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                {aiSummary.loading ? '生成中...' : '重新生成'}
+              </Button>
+            </div>
+            <div className="bg-secondary/60 rounded-lg px-3 py-2 min-h-10 text-sm text-foreground">
+              {aiSummary.loading && !aiSummary.summary
+                ? <span className="text-muted-foreground italic flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" />正在生成摘要...</span>
+                : aiSummary.summary
+                  ? aiSummary.summary
+                  : <span className="text-muted-foreground italic">点击"重新生成"生成 AI 摘要</span>
+              }
+            </div>
+          </div>
+          {/* AI 回复建议 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground font-medium">回复建议</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-primary hover:bg-primary/10 gap-1"
+                onClick={() => {
+                  const ctx = `Issue 标题：${issue.title}\n内容：${issue.body || '（无描述）'}`;
+                  aiSuggestions.generate(ctx).catch(() => toast.error('AI 建议生成失败'));
+                }}
+                disabled={aiSuggestions.loading}
+              >
+                {aiSuggestions.loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Lightbulb className="w-3 h-3" />}
+                {aiSuggestions.loading ? '生成中...' : '生成建议'}
+              </Button>
+            </div>
+            {aiSuggestions.suggestions.length > 0 ? (
+              <div className="space-y-1.5">
+                {aiSuggestions.suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="w-full text-left bg-secondary/60 hover:bg-secondary rounded-lg px-3 py-2 text-sm text-foreground transition-colors border border-transparent hover:border-border"
+                    onClick={() => setNewComment(s)}
+                    title="点击填入评论框"
+                  >
+                    <span className="text-primary font-medium mr-1.5">{i + 1}.</span>
+                    {s}
+                  </button>
+                ))}
+                <p className="text-[10px] text-muted-foreground pl-1">点击建议可自动填入评论框</p>
+              </div>
+            ) : aiSuggestions.loading ? (
+              <div className="bg-secondary/60 rounded-lg px-3 py-2 text-sm text-muted-foreground italic flex items-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />正在生成回复建议...
+              </div>
+            ) : (
+              <div className="bg-secondary/60 rounded-lg px-3 py-2 text-sm text-muted-foreground italic">
+                点击"生成建议"获取 AI 回复候选
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Issue 正文 */}
       <div className="bg-card border border-border rounded-lg overflow-hidden">

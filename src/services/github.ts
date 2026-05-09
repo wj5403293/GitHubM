@@ -1551,3 +1551,87 @@ export async function getRepoStargazers(
     `/repos/${owner}/${repo}/stargazers?per_page=${per_page}&page=${page}`
   );
 }
+
+// ===== Actions Job 日志 =====
+
+/**
+ * 获取指定 Job 的日志文本。
+ * GitHub 返回 302 重定向到真实日志 URL，此函数跟随重定向后返回纯文本。
+ */
+export async function getJobLogs(
+  owner: string,
+  repo: string,
+  jobId: number
+): Promise<string> {
+  const url = `${BASE_URL}/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`;
+  const headers = buildHeaders() as Record<string, string>;
+  // GitHub 会重定向到实际日志地址
+  const res = await fetch(url, { headers, redirect: 'follow' });
+  if (!res.ok) throw new Error(`获取日志失败: ${res.status}`);
+  return res.text();
+}
+
+// ===== PR Review Comment（行内评审评论）=====
+
+export interface CreateReviewCommentParams {
+  body: string;
+  commit_id: string;
+  path: string;
+  line: number;
+  side?: 'LEFT' | 'RIGHT';
+}
+
+/** 创建 PR 行内 Review Comment */
+export async function createPullRequestReviewComment(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  params: CreateReviewCommentParams
+): Promise<GitHubComment> {
+  return request<GitHubComment>(
+    `/repos/${owner}/${repo}/pulls/${pullNumber}/comments`,
+    {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }
+  );
+}
+
+/** 获取 PR 所有行内 Review Comments */
+export async function getPullRequestReviewComments(
+  owner: string,
+  repo: string,
+  pullNumber: number
+): Promise<GitHubComment[]> {
+  return request<GitHubComment[]>(
+    `/repos/${owner}/${repo}/pulls/${pullNumber}/comments?per_page=100`
+  );
+}
+
+// ===== PR Submit Review（快速评审）=====
+
+export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
+
+export interface SubmitReviewParams {
+  event: ReviewEvent;
+  body?: string;
+}
+
+/** 提交 PR 评审（Approve / Request Changes / Comment） */
+export async function submitPullRequestReview(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  params: SubmitReviewParams
+): Promise<void> {
+  await request(
+    `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        event: params.event,
+        body: params.body ?? '',
+      }),
+    }
+  );
+}

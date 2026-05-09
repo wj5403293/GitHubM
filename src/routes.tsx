@@ -32,6 +32,7 @@ import FollowListPage from './pages/FollowListPage';
 import StarredPage from './pages/StarredPage';
 import RepoForksPage from './pages/RepoForksPage';
 import StargazersPage from './pages/StargazersPage';
+import PrDiffPage from './pages/PrDiffPage';
 
 export interface RouteConfig {
   name: string;
@@ -53,6 +54,7 @@ export const routes: RouteConfig[] = [
   { name: 'Issue 详情', path: '/repos/:owner/:repo/issues/:number', element: <IssueDetailPage /> },
   { name: 'Pull Requests', path: '/repos/:owner/:repo/pulls', element: <PullsPage /> },
   { name: 'PR 详情', path: '/repos/:owner/:repo/pulls/:number', element: <PullDetailPage /> },
+  { name: 'PR Diff', path: '/repos/:owner/:repo/pulls/:number/diff', element: <PrDiffPage /> },
   { name: '代码浏览', path: '/repos/:owner/:repo/code/*', element: <CodeBrowserPage /> },
   { name: '代码浏览根', path: '/repos/:owner/:repo/code', element: <CodeBrowserPage /> },
   { name: '提交历史', path: '/repos/:owner/:repo/commits', element: <CommitsPage /> },

@@ -1,6 +1,6 @@
 // GitHub Actions 工作流管理
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronRight,
@@ -17,6 +17,9 @@ import {
   GitBranch,
   Plus,
   Trash2,
+  Terminal,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -49,6 +52,7 @@ import {
   cancelWorkflowRun,
   rerunWorkflowRun,
   getWorkflowRunJobs,
+  getJobLogs,
   getBranches,
   formatRelativeTime,
 } from '@/services/github';
@@ -82,8 +86,130 @@ function RunStatusBadge({ status, conclusion }: { status: string | null; conclus
   return <Badge className="bg-secondary text-muted-foreground border-border text-xs">{conclusion || status || '未知'}</Badge>;
 }
 
-function JobItem({ job }: { job: GitHubWorkflowJob }) {
+// ANSI 颜色码转 Tailwind className（精简版）
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1B\[[0-9;]*[mGKHF]/g, '');
+}
+
+function AnsiLine({ raw }: { raw: string }) {
+  const clean = stripAnsi(raw);
+  // 时间戳前缀（GitHub 日志格式 2024-01-01T00:00:00Z  内容）
+  const m = clean.match(/^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(.*)/);
+  if (m) {
+    return (
+      <span>
+        <span className="text-muted-foreground/50 select-none mr-2 text-[10px]">{m[1].replace('T', ' ').replace('Z', '')}</span>
+        <span>{m[2]}</span>
+      </span>
+    );
+  }
+  return <span>{clean}</span>;
+}
+
+// 日志面板
+interface LogPanelProps {
+  jobId: number;
+  owner: string;
+  repo: string;
+  isRunning: boolean;
+}
+
+function LogPanel({ jobId, owner, repo, isRunning }: LogPanelProps) {
+  const [logs, setLogs] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const text = await getJobLogs(owner, repo, jobId);
+      setLogs(text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '获取日志失败';
+      setLogs(`[错误] ${msg}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [owner, repo, jobId]);
+
+  useEffect(() => {
+    fetchLogs();
+    if (isRunning) {
+      intervalRef.current = setInterval(fetchLogs, 3000);
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [fetchLogs, isRunning]);
+
+  // 自动滚动到底部
+  useEffect(() => {
+    if (scrollRef.current && isRunning) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs, isRunning]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(stripAnsi(logs));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('复制失败');
+    }
+  };
+
+  return (
+    <div className="bg-[#0d1117] border border-border rounded-lg overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-secondary/20">
+        <Terminal className="w-3.5 h-3.5 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground flex-1">日志输出</span>
+        {isRunning && (
+          <span className="flex items-center gap-1 text-[10px] text-warning">
+            <Loader2 className="w-3 h-3 animate-spin" />实时刷新
+          </span>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
+          onClick={handleCopy}
+          disabled={loading || !logs}
+        >
+          {copied ? <Check className="w-3 h-3 text-success" /> : <Copy className="w-3 h-3" />}
+          {copied ? '已复制' : '复制'}
+        </Button>
+      </div>
+      <div
+        ref={scrollRef}
+        className="overflow-y-auto max-h-96 p-3 font-mono text-xs leading-relaxed text-[#e6edf3]"
+      >
+        {loading ? (
+          <div className="flex items-center gap-2 text-muted-foreground py-4">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span>加载日志...</span>
+          </div>
+        ) : logs ? (
+          logs.split('\n').map((line, i) => (
+            <div key={i} className="whitespace-pre-wrap break-all py-0.5 hover:bg-white/5">
+              <AnsiLine raw={line} />
+            </div>
+          ))
+        ) : (
+          <span className="text-muted-foreground">暂无日志</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function JobItem({ job, owner, repo }: { job: GitHubWorkflowJob; owner: string; repo: string }) {
   const [open, setOpen] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const isRunning = job.status === 'in_progress' || job.status === 'queued';
+
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="w-full flex items-center gap-2 px-4 py-2 hover:bg-secondary/50 transition-colors text-left">
@@ -105,9 +231,25 @@ function JobItem({ job }: { job: GitHubWorkflowJob }) {
               ) : (
                 <div className="w-3 h-3 rounded-full border border-border shrink-0" />
               )}
-              <span className="text-xs text-muted-foreground">{step.name}</span>
+              <span className="text-xs text-muted-foreground flex-1 min-w-0 truncate">{step.name}</span>
             </div>
           ))}
+          {/* 日志查看按钮 */}
+          <div className="pt-2 pb-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`h-7 text-xs gap-1.5 border transition-colors ${showLogs ? 'border-primary/40 text-primary bg-primary/10' : 'border-border text-muted-foreground hover:bg-secondary'}`}
+              onClick={() => setShowLogs(!showLogs)}
+            >
+              <Terminal className="w-3 h-3" />
+              {showLogs ? '收起日志' : '查看日志'}
+              {isRunning && <span className="text-warning text-[10px]">● 实时</span>}
+            </Button>
+          </div>
+          {showLogs && (
+            <LogPanel jobId={job.id} owner={owner} repo={repo} isRunning={isRunning} />
+          )}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -123,13 +265,25 @@ function RunDetail({ owner, repo, run, onClose }: {
   const [loadingJobs, setLoadingJobs] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isRunning = run.status === 'in_progress' || run.status === 'queued';
 
-  useEffect(() => {
+  const loadJobs = useCallback(() => {
     getWorkflowRunJobs(owner, repo, run.id)
       .then((res) => setJobs(res.jobs))
       .catch(console.error)
       .finally(() => setLoadingJobs(false));
   }, [owner, repo, run.id]);
+
+  useEffect(() => {
+    loadJobs();
+    if (isRunning) {
+      intervalRef.current = setInterval(loadJobs, 5000);
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [loadJobs, isRunning]);
 
   const handleCancel = async () => {
     setCancelling(true);
@@ -164,6 +318,11 @@ function RunDetail({ owner, repo, run, onClose }: {
         <span className="text-muted-foreground text-sm">/</span>
         <span className="text-sm font-medium text-foreground truncate max-w-xs">{run.name} #{run.run_number}</span>
         <RunStatusBadge status={run.status} conclusion={run.conclusion} />
+        {isRunning && (
+          <span className="text-[11px] text-warning flex items-center gap-1 ml-1">
+            <Loader2 className="w-3 h-3 animate-spin" />自动刷新中
+          </span>
+        )}
         <div className="ml-auto flex gap-2">
           {(run.status === 'in_progress' || run.status === 'queued') && (
             <Button
@@ -204,7 +363,7 @@ function RunDetail({ owner, repo, run, onClose }: {
           <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 bg-muted" />)}</div>
         ) : jobs.length === 0 ? (
           <div className="py-8 text-center text-muted-foreground text-sm">暂无任务数据</div>
-        ) : jobs.map((job) => <JobItem key={job.id} job={job} />)}
+        ) : jobs.map((job) => <JobItem key={job.id} job={job} owner={owner} repo={repo} />)}
       </div>
     </div>
   );
