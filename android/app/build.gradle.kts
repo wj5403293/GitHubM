@@ -3,43 +3,62 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// ── CI 注入的版本信息（本地构建回退到 1 / "1.0.local"）──────────────
+val ciVersionCode  = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+val ciVersionName  = System.getenv("VERSION_NAME") ?: "1.0.local"
+
+// ── Release 签名（CI 注入；本地 fallback 到 debug keystore）──────────
+val ciKeystorePath = System.getenv("KEYSTORE_PATH") ?: ""
+val ciStorePass    = System.getenv("STORE_PASSWORD") ?: "android"
+val ciKeyAlias     = System.getenv("KEY_ALIAS")      ?: "androiddebugkey"
+val ciKeyPass      = System.getenv("KEY_PASSWORD")   ?: "android"
+
 android {
     namespace = "com.github.manager"
     compileSdk = 34
-
-    // ── 签名配置：使用 CI 生成的 keystore，确保覆盖安装签名一致 ──
-    signingConfigs {
-        create("ci") {
-            storeFile = file("../ci-release.keystore")
-            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "github-manager"
-            keyAlias = System.getenv("KEY_ALIAS") ?: "github-manager"
-            keyPassword = System.getenv("KEY_PASSWORD") ?: "github-manager"
-        }
-    }
 
     defaultConfig {
         applicationId = "com.github.manager"
         minSdk = 26          // Android 8.0+，覆盖主流设备
         targetSdk = 34
-        // 版本号：环境变量 > 默认值
-        versionCode = (System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1)
-        versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
+        versionCode = ciVersionCode
+        versionName = ciVersionName
+    }
+
+    // ── 签名配置 ─────────────────────────────────────────────────────
+    signingConfigs {
+        create("release") {
+            // CI 提供 KEYSTORE_PATH 时使用 release 签名，否则使用 debug keystore
+            if (ciKeystorePath.isNotEmpty()) {
+                storeFile = file(ciKeystorePath)
+                storePassword = ciStorePass
+                keyAlias = ciKeyAlias
+                keyPassword = ciKeyPass
+            } else {
+                // 本地开发：使用 Android 默认 debug.keystore，签名一致可覆盖安装
+                val debugKeystore = File(System.getProperty("user.home"), ".android/debug.keystore")
+                storeFile = debugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
         debug {
             isDebuggable = true
-            // debug 也使用 CI 签名，便于开发阶段覆盖安装
-            signingConfig = signingConfigs.getByName("ci")
         }
         release {
+            // Release 开启代码混淆与资源压缩，减小 APK 体积
             isMinifyEnabled = true
             isShrinkResources = true
+            // 使用上方声明的 release 签名配置，确保覆盖安装兼容
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("ci")
         }
     }
 
