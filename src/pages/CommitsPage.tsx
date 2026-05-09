@@ -30,6 +30,7 @@ import {
 import { getCommits, getCommit, getBranches, formatRelativeTime } from '@/services/github';
 import type { GitHubCommit, GitHubBranch } from '@/types/types';
 import { toast } from 'sonner';
+import { pageCache } from '@/lib/page-cache';
 
 export default function CommitsPage() {
   const { owner, repo } = useParams<{ owner: string; repo: string }>();
@@ -53,9 +54,22 @@ export default function CommitsPage() {
       .catch(console.error);
   }, [owner, repo]);
 
-  const loadCommits = useCallback(async (pageNum = 1, append = false) => {
+  const loadCommits = useCallback(async (pageNum = 1, append = false, force = false) => {
     if (!owner || !repo || !selectedBranch) return;
     if (pageNum === 1) setLoading(true);
+
+    const cacheKey = `commits:${owner}/${repo}:${selectedBranch}:p1`;
+    if (pageNum === 1 && !append && !force) {
+      const cached = pageCache.get<{ commits: GitHubCommit[]; hasNextPage: boolean }>(cacheKey);
+      if (cached) {
+        setCommits(cached.commits);
+        setHasNextPage(cached.hasNextPage);
+        setPage(1);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const result = await getCommits(owner, repo, {
         sha: selectedBranch,
@@ -66,6 +80,7 @@ export default function CommitsPage() {
         setCommits((prev) => [...prev, ...result.data]);
       } else {
         setCommits(result.data);
+        pageCache.set(cacheKey, { commits: result.data, hasNextPage: result.hasNextPage });
       }
       setHasNextPage(result.hasNextPage);
       setPage(pageNum);

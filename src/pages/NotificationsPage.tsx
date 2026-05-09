@@ -24,6 +24,7 @@ import {
 } from '@/services/github';
 import type { GitHubNotification } from '@/types/types';
 import { toast } from 'sonner';
+import { pageCache } from '@/lib/page-cache';
 
 export default function NotificationsPage() {
   const navigate = useNavigate();
@@ -32,11 +33,23 @@ export default function NotificationsPage() {
   const [showAll, setShowAll] = useState(false);
   const [markingAll, setMarkingAll] = useState(false);
 
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (force = false) => {
+    const cacheKey = `notifications:${showAll}`;
+
+    if (!force) {
+      const cached = pageCache.get<GitHubNotification[]>(cacheKey);
+      if (cached) {
+        setNotifications(cached);
+        setLoading(false);
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const result = await getNotifications({ all: showAll, per_page: 50 });
       setNotifications(result.data);
+      pageCache.set(cacheKey, result.data, 2 * 60 * 1000); // 通知 2 分钟 TTL
     } catch (err) {
       toast.error('加载通知失败');
       console.error(err);
@@ -52,9 +65,11 @@ export default function NotificationsPage() {
   const handleMarkRead = async (id: string) => {
     try {
       await markNotificationRead(id);
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, unread: false } : n))
-      );
+      setNotifications((prev) => {
+        const updated = prev.map((n) => (n.id === id ? { ...n, unread: false } : n));
+        pageCache.set(`notifications:${showAll}`, updated, 2 * 60 * 1000);
+        return updated;
+      });
     } catch (err) {
       toast.error('标记失败');
       console.error(err);
@@ -112,7 +127,11 @@ export default function NotificationsPage() {
     setMarkingAll(true);
     try {
       await markAllNotificationsRead();
-      setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+      setNotifications((prev) => {
+        const updated = prev.map((n) => ({ ...n, unread: false }));
+        pageCache.set(`notifications:${showAll}`, updated, 2 * 60 * 1000);
+        return updated;
+      });
       toast.success('全部已标记为已读');
     } catch (err) {
       toast.error('操作失败');
@@ -182,7 +201,7 @@ export default function NotificationsPage() {
             variant="ghost"
             size="sm"
             className="text-muted-foreground hover:bg-secondary"
-            onClick={loadNotifications}
+            onClick={() => loadNotifications(true)}
           >
             <RefreshCw className="w-4 h-4 mr-1.5" />
             刷新

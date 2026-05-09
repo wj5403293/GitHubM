@@ -363,9 +363,23 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?,
             ): Boolean {
                 val url = request?.url?.toString() ?: return false
-                return !url.startsWith("file://") &&
-                    !url.startsWith("https://") &&
-                    !url.startsWith("http://")
+
+                // 本地资源：让 WebView 自己处理
+                if (url.startsWith("file://")) return false
+
+                // 外部链接（http/https）：一律用系统浏览器打开，避免破坏 React 应用历史栈。
+                // 若允许 WebView 加载外部页面，React Router 的 history.state.idx
+                // 会丢失，返回键无法回到应用内部路由。
+                if (url.startsWith("https://") || url.startsWith("http://")) {
+                    runCatching {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        startActivity(intent)
+                    }
+                    return true // 阻止 WebView 自行加载
+                }
+
+                // 其他协议（tel:、mailto: 等）：交系统处理
+                return true
             }
 
             /**

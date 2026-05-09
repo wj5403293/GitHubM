@@ -1466,3 +1466,76 @@ export async function updateUserProfile(params: {
     body: JSON.stringify(params),
   });
 }
+
+/** 获取当前用户 Star 的仓库列表 */
+export async function getStarredRepos(params: {
+  per_page?: number;
+  page?: number;
+  sort?: 'created' | 'updated';
+  direction?: 'asc' | 'desc';
+} = {}): Promise<GitHubRepo[]> {
+  const { per_page = 30, page = 1, sort = 'updated', direction = 'desc' } = params;
+  return request<GitHubRepo[]>(
+    `/user/starred?per_page=${per_page}&page=${page}&sort=${sort}&direction=${direction}`
+  );
+}
+
+/**
+ * 获取当前用户 Star 的仓库总数。
+ * 通过 per_page=1 请求并解析 Link header 中的 last page 编号得到总数。
+ * 若无 Link header（总数 ≤ 1），则直接返回响应数组长度。
+ */
+export async function getStarredCount(): Promise<number> {
+  const result = await requestWithPagination<GitHubRepo>('/user/starred?per_page=1');
+  if (!result.hasNextPage) return result.data.length;
+  // 从原始 headers 取 last page 编号（requestWithPagination 未暴露 links，改用 fetch 直接请求）
+  const url = `${BASE_URL}/user/starred?per_page=1`;
+  const response = await fetch(addCacheBuster(url), { headers: buildHeaders() });
+  const linkHeader = response.headers.get('Link') || '';
+  const match = linkHeader.match(/[?&]page=(\d+)>;\s*rel="last"/);
+  return match ? parseInt(match[1], 10) : result.data.length;
+}
+
+/** 关注某用户 */
+export async function followUser(username: string): Promise<void> {
+  await request<void>(`/user/following/${encodeURIComponent(username)}`, { method: 'PUT' });
+}
+
+/** 取消关注某用户 */
+export async function unfollowUser(username: string): Promise<void> {
+  await request<void>(`/user/following/${encodeURIComponent(username)}`, { method: 'DELETE' });
+}
+
+/** 检查当前用户是否关注了某用户（204=关注，404=未关注） */
+export async function checkFollowing(username: string): Promise<boolean> {
+  try {
+    await request<void>(`/user/following/${encodeURIComponent(username)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 获取仓库的 Fork 列表 */
+export async function getRepoForks(
+  owner: string,
+  repo: string,
+  params: { per_page?: number; page?: number; sort?: 'newest' | 'oldest' | 'stargazers' | 'watchers' } = {}
+): Promise<GitHubRepo[]> {
+  const { per_page = 30, page = 1, sort = 'newest' } = params;
+  return request<GitHubRepo[]>(
+    `/repos/${owner}/${repo}/forks?per_page=${per_page}&page=${page}&sort=${sort}`
+  );
+}
+
+/** 获取仓库的 watch（watchers）用户列表 */
+export async function getRepoWatchers(
+  owner: string,
+  repo: string,
+  params: { per_page?: number; page?: number } = {}
+): Promise<GitHubUser[]> {
+  const { per_page = 30, page = 1 } = params;
+  return request<GitHubUser[]>(
+    `/repos/${owner}/${repo}/subscribers?per_page=${per_page}&page=${page}`
+  );
+}

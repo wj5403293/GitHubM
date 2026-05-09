@@ -24,6 +24,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getPullRequests, formatRelativeTime } from '@/services/github';
 import type { GitHubPullRequest, PrState } from '@/types/types';
 import { toast } from 'sonner';
+import { pageCache } from '@/lib/page-cache';
 
 export default function PullsPage() {
   const { owner, repo } = useParams<{ owner: string; repo: string }>();
@@ -35,9 +36,22 @@ export default function PullsPage() {
   const [stateFilter, setStateFilter] = useState<PrState>('open');
   const [sortField, setSortField] = useState<'created' | 'updated' | 'popularity' | 'long-running'>('created');
 
-  const loadPulls = useCallback(async (pageNum = 1, append = false) => {
+  const loadPulls = useCallback(async (pageNum = 1, append = false, force = false) => {
     if (!owner || !repo) return;
     if (pageNum === 1) setLoading(true);
+
+    const cacheKey = `pulls:${owner}/${repo}:${stateFilter}:${sortField}:p1`;
+    if (pageNum === 1 && !append && !force) {
+      const cached = pageCache.get<{ pulls: GitHubPullRequest[]; hasNextPage: boolean }>(cacheKey);
+      if (cached) {
+        setPulls(cached.pulls);
+        setHasNextPage(cached.hasNextPage);
+        setPage(1);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const result = await getPullRequests(owner, repo, {
         state: stateFilter,
@@ -49,6 +63,7 @@ export default function PullsPage() {
         setPulls((prev) => [...prev, ...result.data]);
       } else {
         setPulls(result.data);
+        pageCache.set(cacheKey, { pulls: result.data, hasNextPage: result.hasNextPage });
       }
       setHasNextPage(result.hasNextPage);
       setPage(pageNum);

@@ -87,6 +87,7 @@ import {
 import type { GitHubRepo, RepoSortField, SortDirection } from '@/types/types';
 import { toast } from 'sonner';
 import { useDebounce } from '@/hooks/use-debounce';
+import { pageCache } from '@/lib/page-cache';
 
 // 仓库右键上下文菜单
 function RepoContextMenu({ repo, onDeleteSuccess }: { repo: GitHubRepo; onDeleteSuccess: () => void }) {
@@ -395,9 +396,22 @@ export default function ReposPage() {
   const [licenses, setLicenses] = useState<Array<{ key: string; name: string }>>([]);
   const [creating, setCreating] = useState(false);
 
-  const loadRepos = useCallback(async (pageNum = 1, append = false) => {
+  const loadRepos = useCallback(async (pageNum = 1, append = false, force = false) => {
     if (pageNum === 1) setLoading(true);
     else setLoadingMore(true);
+
+    // 只对第一页默认加载走缓存（append=false 时），强制刷新跳过缓存
+    const cacheKey = `repos:${sortField}:${sortDirection}:${typeFilter}:p1`;
+    if (pageNum === 1 && !append && !force) {
+      const cached = pageCache.get<{ repos: GitHubRepo[]; hasNextPage: boolean }>(cacheKey);
+      if (cached) {
+        setRepos(cached.repos);
+        setHasNextPage(cached.hasNextPage);
+        setPage(1);
+        setLoading(false);
+        return;
+      }
+    }
 
     try {
       const result = await getUserRepos({
@@ -411,6 +425,8 @@ export default function ReposPage() {
         setRepos((prev) => [...prev, ...result.data]);
       } else {
         setRepos(result.data);
+        // 第一页加载成功后写入缓存
+        pageCache.set(cacheKey, { repos: result.data, hasNextPage: result.hasNextPage });
       }
       setHasNextPage(result.hasNextPage);
       setPage(pageNum);
@@ -468,7 +484,8 @@ export default function ReposPage() {
       setNewRepoAutoInit(true);
       setNewRepoGitignore('');
       setNewRepoLicense('');
-      loadRepos(1, false);
+      pageCache.invalidate('repos:'); // 创建后使仓库列表缓存失效
+      loadRepos(1, false, true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '创建仓库失败');
     } finally {
@@ -489,7 +506,7 @@ export default function ReposPage() {
             variant="ghost"
             size="icon"
             className="text-muted-foreground hover:bg-secondary"
-            onClick={() => loadRepos(1, false)}
+            onClick={() => loadRepos(1, false, true)}
           >
             <RefreshCw className="w-4 h-4" />
           </Button>

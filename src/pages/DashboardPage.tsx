@@ -9,25 +9,24 @@ import {
   Users,
   Eye,
   Clock,
-  TrendingUp,
   Activity,
   ExternalLink,
   Pin,
   Lock,
   Globe,
   Flame,
-} from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+} from 'lucide-react';import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
-import { getUserRepos, getUserEvents, formatRelativeTime, formatNumber, getLanguageColor } from '@/services/github';
+import { getUserRepos, getUserEvents, formatRelativeTime, formatNumber, getLanguageColor, getStarredCount } from '@/services/github';
 import { gqlGetContributions, gqlGetPinnedRepos } from '@/services/github-graphql';
 import type { GitHubRepo, GitHubEvent, ContributionCalendar, GQL_PinnedRepo } from '@/types/types';
 import { toast } from 'sonner';
+import { pageCache } from '@/lib/page-cache';
 
 // 贡献等级 → 样式映射
 function getContributionClass(level: string, count: number): string {
@@ -202,56 +201,98 @@ export default function DashboardPage() {
   const [calendarLoading, setCalendarLoading] = useState(true);
   const [pinnedRepos, setPinnedRepos] = useState<GQL_PinnedRepo[]>([]);
   const [pinnedLoading, setPinnedLoading] = useState(true);
+  const [starredCount, setStarredCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!user) return;
 
-    const loadData = async () => {
+    const cacheKey = `dashboard:${user.login}`;
+
+    // 命中缓存：立即恢复，无需等待网络
+    const cached = pageCache.get<{
+      repos: GitHubRepo[];
+      events: GitHubEvent[];
+      calendar: ContributionCalendar | null;
+      pinnedRepos: GQL_PinnedRepo[];
+      starredCount: number | null;
+    }>(cacheKey);
+    if (cached) {
+      setRepos(cached.repos);
+      setEvents(cached.events);
+      setCalendar(cached.calendar);
+      setPinnedRepos(cached.pinnedRepos);
+      setStarredCount(cached.starredCount);
+      setLoading(false);
+      setCalendarLoading(false);
+      setPinnedLoading(false);
+      return;
+    }
+
+    // 未命中缓存：并行加载，全部完成后写入缓存
+    const loadData = async (): Promise<{ repos: GitHubRepo[]; events: GitHubEvent[] }> => {
       setLoading(true);
       try {
         const [reposResult, eventsResult] = await Promise.all([
           getUserRepos({ sort: 'pushed', per_page: 6, type: 'owner' }),
           getUserEvents(user.login, 1),
         ]);
-        setRepos(reposResult.data);
-        setEvents(eventsResult.slice(0, 15));
+        const repos = reposResult.data;
+        const events = eventsResult.slice(0, 15);
+        setRepos(repos);
+        setEvents(events);
+        return { repos, events };
       } catch (err) {
         toast.error('加载仪表盘数据失败');
         console.error(err);
+        return { repos: [], events: [] };
       } finally {
         setLoading(false);
       }
     };
 
-    // GraphQL：贡献热力图
-    const loadCalendar = async () => {
+    const loadCalendar = async (): Promise<ContributionCalendar | null> => {
       setCalendarLoading(true);
       try {
         const cal = await gqlGetContributions(user.login);
         setCalendar(cal);
+        return cal;
       } catch {
-        // 贡献图加载失败不影响其他功能
+        return null;
       } finally {
         setCalendarLoading(false);
       }
     };
 
-    // GraphQL：Pinned 仓库
-    const loadPinned = async () => {
+    const loadPinned = async (): Promise<GQL_PinnedRepo[]> => {
       setPinnedLoading(true);
       try {
         const pinned = await gqlGetPinnedRepos(user.login);
         setPinnedRepos(pinned);
+        return pinned;
       } catch {
-        // 静默失败
+        return [];
       } finally {
         setPinnedLoading(false);
       }
     };
 
-    loadData();
-    loadCalendar();
-    loadPinned();
+    // 加载真实 starred 数量
+    const loadStarredCount = async (): Promise<number | null> => {
+      try {
+        const count = await getStarredCount();
+        setStarredCount(count);
+        return count;
+      } catch {
+        return null;
+      }
+    };
+
+    // 全部加载完后写缓存，下次返回该页时立即恢复
+    Promise.all([loadData(), loadCalendar(), loadPinned(), loadStarredCount()]).then(
+      ([{ repos, events }, calendar, pinnedRepos, starredCount]) => {
+        pageCache.set(cacheKey, { repos, events, calendar, pinnedRepos, starredCount });
+      }
+    );
   }, [user]);
 
   const getEventDescription = (event: GitHubEvent): string => {
@@ -369,10 +410,10 @@ export default function DashboardPage() {
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
-          { label: '公开仓库', value: user.public_repos, icon: BookOpen, color: 'text-primary', to: '/repos' },
-          { label: '关注者', value: user.followers, icon: Users, color: 'text-accent', to: '/follow-list/followers' },
-          { label: '正在关注', value: user.following, icon: Eye, color: 'text-chart-3', to: '/follow-list/following' },
-          { label: '公开 Gist', value: user.public_gists, icon: TrendingUp, color: 'text-chart-4', to: '/gists' },
+          { label: '公开仓库', value: user.public_repos as number | null, icon: BookOpen, color: 'text-primary', to: '/repos' },
+          { label: '关注者', value: user.followers as number | null, icon: Users, color: 'text-accent', to: '/follow-list/followers' },
+          { label: '正在关注', value: user.following as number | null, icon: Eye, color: 'text-chart-3', to: '/follow-list/following' },
+          { label: '我的收藏', value: starredCount, icon: Star, color: 'text-warning', to: '/starred' },
         ].map((stat) => {
           const Icon = stat.icon;
           return (
@@ -386,7 +427,11 @@ export default function DashboardPage() {
                 <Icon className={`w-4 h-4 ${stat.color}`} />
                 <span className="text-xs text-muted-foreground">{stat.label}</span>
               </div>
-              <p className="text-2xl font-bold text-foreground">{formatNumber(stat.value)}</p>
+              {stat.value === null ? (
+                <Skeleton className="h-8 w-12 bg-muted mt-1" />
+              ) : (
+                <p className="text-2xl font-bold text-foreground">{formatNumber(stat.value)}</p>
+              )}
               <p className="text-xs text-muted-foreground mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 点击查看 →
               </p>

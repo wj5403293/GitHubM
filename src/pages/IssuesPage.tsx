@@ -40,6 +40,7 @@ import {
 } from '@/services/github';
 import type { GitHubIssue, GitHubLabel, IssueState, IssueSortField, SortDirection } from '@/types/types';
 import { toast } from 'sonner';
+import { pageCache } from '@/lib/page-cache';
 
 export default function IssuesPage() {
   const { owner, repo } = useParams<{ owner: string; repo: string }>();
@@ -57,9 +58,22 @@ export default function IssuesPage() {
   const [newBody, setNewBody] = useState('');
   const [creating, setCreating] = useState(false);
 
-  const loadIssues = useCallback(async (pageNum = 1, append = false) => {
+  const loadIssues = useCallback(async (pageNum = 1, append = false, force = false) => {
     if (!owner || !repo) return;
     if (pageNum === 1) setLoading(true);
+
+    const cacheKey = `issues:${owner}/${repo}:${stateFilter}:${sortField}:p1`;
+    if (pageNum === 1 && !append && !force) {
+      const cached = pageCache.get<{ issues: GitHubIssue[]; hasNextPage: boolean }>(cacheKey);
+      if (cached) {
+        setIssues(cached.issues);
+        setHasNextPage(cached.hasNextPage);
+        setPage(1);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const result = await getIssues(owner, repo, {
         state: stateFilter,
@@ -74,6 +88,7 @@ export default function IssuesPage() {
         setIssues((prev) => [...prev, ...issuesOnly]);
       } else {
         setIssues(issuesOnly);
+        pageCache.set(cacheKey, { issues: issuesOnly, hasNextPage: result.hasNextPage });
       }
       setHasNextPage(result.hasNextPage);
       setPage(pageNum);
@@ -108,7 +123,8 @@ export default function IssuesPage() {
       setCreateDialogOpen(false);
       setNewTitle('');
       setNewBody('');
-      loadIssues(1);
+      pageCache.invalidate(`issues:${owner}/${repo}:`);
+      loadIssues(1, false, true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '创建失败');
     } finally {

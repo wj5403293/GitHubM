@@ -26,6 +26,8 @@ import {
   MessageCircle,
   BookOpen,
   LayoutGrid,
+  Edit,
+  Network,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +35,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   getRepo,
   getReadme,
@@ -57,10 +65,14 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useAuth } from '@/contexts/AuthContext';
+import { pageCache } from '@/lib/page-cache';
 
 export default function RepoDetailPage() {
   const { owner, repo: repoName } = useParams<{ owner: string; repo: string }>();
   const navigate = useNavigate();
+  const { user: currentUser } = useAuth();
+
   const [repo, setRepo] = useState<GitHubRepo | null>(null);
   const [readme, setReadme] = useState<string>('');
   const [commits, setCommits] = useState<GitHubCommit[]>([]);
@@ -78,31 +90,65 @@ export default function RepoDetailPage() {
   const [editRepoName, setEditRepoName] = useState('');
   const [updating, setUpdating] = useState(false);
 
+  // 判断当前用户是否为仓库所有者
+  const isOwner = !!(currentUser && owner && currentUser.login.toLowerCase() === owner.toLowerCase());
+
   useEffect(() => {
     if (!owner || !repoName) return;
+
+    const cacheKey = `repodetail:${owner}/${repoName}`;
+
+    // 命中缓存：立即恢复所有数据，不展示 loading
+    const cached = pageCache.get<{
+      repo: GitHubRepo;
+      languages: Record<string, number>;
+      readme: string;
+      commits: GitHubCommit[];
+      starred: boolean;
+    }>(cacheKey);
+    if (cached) {
+      setRepo(cached.repo);
+      setLanguages(cached.languages);
+      setReadme(cached.readme);
+      setCommits(cached.commits);
+      setStarred(cached.starred);
+      setLoading(false);
+      return;
+    }
 
     const load = async () => {
       setLoading(true);
       try {
-        const [repoData, starredStatus, langData] = await Promise.all([
+        const [repoData, langData] = await Promise.all([
           getRepo(owner, repoName),
-          checkStarred(owner, repoName),
           getRepoLanguages(owner, repoName),
         ]);
         setRepo(repoData);
-        setStarred(starredStatus);
         setLanguages(langData);
+
+        // 非仓库所有者才需要检查 star 状态
+        let starredVal = false;
+        if (!isOwner) {
+          starredVal = await checkStarred(owner, repoName).catch(() => false);
+          setStarred(starredVal);
+        }
 
         // 加载 README 和提交记录（不阻塞主内容）
         Promise.all([
           getReadme(owner, repoName).catch(() => null),
           getCommits(owner, repoName, { per_page: 10 }).catch(() => ({ data: [], hasNextPage: false })),
         ]).then(([readmeData, commitsResult]) => {
-          if (readmeData?.content) {
-            const decoded = decodeBase64Content(readmeData.content);
-            setReadme(decoded);
-          }
+          const decoded = readmeData?.content ? decodeBase64Content(readmeData.content) : '';
+          setReadme(decoded);
           setCommits(commitsResult.data);
+          // 所有数据就绪后写入缓存
+          pageCache.set(cacheKey, {
+            repo: repoData,
+            languages: langData,
+            readme: decoded,
+            commits: commitsResult.data,
+            starred: starredVal,
+          });
         });
       } catch (err) {
         toast.error('加载仓库信息失败');
@@ -113,21 +159,30 @@ export default function RepoDetailPage() {
     };
 
     load();
-  }, [owner, repoName]);
+  }, [owner, repoName, isOwner]);
 
   const handleStar = async () => {
     if (!owner || !repoName) return;
     setStarring(true);
     try {
+      const cacheKey = `repodetail:${owner}/${repoName}`;
       if (starred) {
         await unstarRepo(owner, repoName);
         setStarred(false);
-        setRepo((prev) => prev ? { ...prev, stargazers_count: prev.stargazers_count - 1 } : prev);
+        setRepo((prev) => {
+          const updated = prev ? { ...prev, stargazers_count: prev.stargazers_count - 1 } : prev;
+          if (updated) pageCache.set(cacheKey, { repo: updated, languages, readme, commits, starred: false });
+          return updated;
+        });
         toast.success('已取消收藏');
       } else {
         await starRepo(owner, repoName);
         setStarred(true);
-        setRepo((prev) => prev ? { ...prev, stargazers_count: prev.stargazers_count + 1 } : prev);
+        setRepo((prev) => {
+          const updated = prev ? { ...prev, stargazers_count: prev.stargazers_count + 1 } : prev;
+          if (updated) pageCache.set(cacheKey, { repo: updated, languages, readme, commits, starred: true });
+          return updated;
+        });
         toast.success('已收藏仓库');
       }
     } catch {
@@ -157,6 +212,8 @@ export default function RepoDetailPage() {
     setDeleting(true);
     try {
       await deleteRepo(owner, repoName);
+      pageCache.delete(`repodetail:${owner}/${repoName}`);
+      pageCache.invalidate('repos:'); // 使仓库列表缓存失效
       toast.success('仓库已删除');
       navigate('/repos');
     } catch (err) { toast.error(err instanceof Error ? err.message : '删除失败'); }
@@ -170,6 +227,11 @@ export default function RepoDetailPage() {
     try {
       const updated = await updateRepo(owner, repoName, { name: editRepoName.trim() || repoName, description: editDesc, private: editPrivate });
       setRepo(updated);
+      // 更新缓存中的仓库信息
+      const cacheKey = `repodetail:${owner}/${repoName}`;
+      const cached = pageCache.get<{ repo: GitHubRepo; languages: Record<string, number>; readme: string; commits: GitHubCommit[]; starred: boolean }>(cacheKey);
+      if (cached) pageCache.set(cacheKey, { ...cached, repo: updated });
+      pageCache.invalidate('repos:');
       toast.success('仓库信息已更新');
       setEditDialogOpen(false);
       if (editRepoName.trim() && editRepoName.trim() !== repoName) navigate(`/repos/${owner}/${editRepoName.trim()}`);
@@ -220,6 +282,7 @@ export default function RepoDetailPage() {
   }
 
   return (
+    <TooltipProvider>
     <div className="p-4 md:p-6 space-y-4 max-w-5xl mx-auto">
       {/* 仓库标题 */}
       <div className="space-y-2">
@@ -244,52 +307,104 @@ export default function RepoDetailPage() {
               {repo.archived && (
                 <Badge variant="outline" className="border-warning text-warning text-xs">已归档</Badge>
               )}
+              {/* 身份标识 */}
+              {isOwner && (
+                <Badge className="bg-primary/15 text-primary border border-primary/30 text-xs">我的仓库</Badge>
+              )}
             </div>
             {repo.description && (
               <p className="text-sm text-muted-foreground mt-1 text-pretty">{repo.description}</p>
             )}
           </div>
-          {/* 管理操作：固定右侧，不参与换行 */}
+
+          {/* 右侧操作按钮区 —— 根据 isOwner 动态显示 */}
           <div className="flex items-center gap-1 shrink-0">
             <a href={repo.html_url} target="_blank" rel="noopener noreferrer">
-              <Button variant="ghost" size="icon" className="w-8 h-8 text-muted-foreground hover:bg-secondary" title="在 GitHub 中查看">
-                <ExternalLink className="w-4 h-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="w-8 h-8 text-muted-foreground hover:bg-secondary" title="在 GitHub 中查看">
+                    <ExternalLink className="w-4 h-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-popover border-border text-foreground text-xs">在 GitHub 中查看</TooltipContent>
+              </Tooltip>
             </a>
-            <Button variant="ghost" size="icon" className="w-8 h-8 text-muted-foreground hover:bg-secondary" onClick={openEditDialog} title="仓库设置">
-              <Settings className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="w-8 h-8 text-destructive/70 hover:bg-destructive/10 hover:text-destructive" onClick={() => { setDeleteConfirmName(''); setDeleteDialogOpen(true); }} title="删除仓库">
-              <Trash2 className="w-4 h-4" />
-            </Button>
+            {/* 仅自己的仓库显示编辑和删除 */}
+            {isOwner && (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" className="w-8 h-8 text-muted-foreground hover:bg-secondary" onClick={openEditDialog}>
+                      <Settings className="w-4 h-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="bg-popover border-border text-foreground text-xs">编辑仓库设置</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" className="w-8 h-8 text-destructive/70 hover:bg-destructive/10 hover:text-destructive" onClick={() => { setDeleteConfirmName(''); setDeleteDialogOpen(true); }}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent className="bg-popover border-border text-foreground text-xs">删除仓库</TooltipContent>
+                </Tooltip>
+              </>
+            )}
           </div>
         </div>
       </div>
 
-      {/* 统计行 —— 仅 star/fork/eye/license，无换行风险 */}
+      {/* 统计行 —— 根据 isOwner 显示不同操作 */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className={`border-border h-8 ${starred ? 'text-warning border-warning' : 'text-foreground hover:bg-secondary'}`}
-          onClick={handleStar}
-          disabled={starring}
-        >
-          <Star className={`w-3.5 h-3.5 mr-1.5 ${starred ? 'fill-warning' : ''}`} />
-          {starred ? '已收藏' : '收藏'}
-          <span className="ml-1.5 text-xs text-muted-foreground">{formatNumber(repo.stargazers_count)}</span>
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="border-border hover:bg-secondary h-8"
-          onClick={handleFork}
-          disabled={forking}
-        >
-          <GitFork className="w-3.5 h-3.5 mr-1.5" />
-          Fork
-          <span className="ml-1.5 text-xs text-muted-foreground">{formatNumber(repo.forks_count)}</span>
-        </Button>
+        {/* 他人仓库：显示 Star 和 Fork 操作按钮 */}
+        {!isOwner && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              className={`border-border h-8 ${starred ? 'text-warning border-warning' : 'text-foreground hover:bg-secondary'}`}
+              onClick={handleStar}
+              disabled={starring}
+            >
+              <Star className={`w-3.5 h-3.5 mr-1.5 ${starred ? 'fill-warning' : ''}`} />
+              {starred ? '已收藏' : '收藏'}
+              <span className="ml-1.5 text-xs text-muted-foreground">{formatNumber(repo.stargazers_count)}</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-border hover:bg-secondary h-8"
+              onClick={handleFork}
+              disabled={forking}
+            >
+              {forking
+                ? <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Fork 中</>
+                : <><GitFork className="w-3.5 h-3.5 mr-1.5" />Fork</>
+              }
+              <span className="ml-1.5 text-xs text-muted-foreground">{formatNumber(repo.forks_count)}</span>
+            </Button>
+          </>
+        )}
+        {/* 自己的仓库：Star/Fork 数只读展示 + 查看 Forks 按钮 */}
+        {isOwner && (
+          <>
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground border border-border rounded-md px-3 h-8">
+              <Star className="w-3.5 h-3.5" />
+              <span>{formatNumber(repo.stargazers_count)}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-border hover:bg-secondary h-8"
+              onClick={() => navigate(`/repos/${repo.full_name}/forks`)}
+            >
+              <Network className="w-3.5 h-3.5 mr-1.5" />
+              查看 Forks
+              <span className="ml-1.5 text-xs text-muted-foreground">{formatNumber(repo.forks_count)}</span>
+            </Button>
+          </>
+        )}
+        {/* 通用只读展示 */}
         <div className="flex items-center gap-1 text-sm text-muted-foreground">
           <Eye className="w-3.5 h-3.5" />
           <span>{formatNumber(repo.watchers_count)}</span>
@@ -302,22 +417,18 @@ export default function RepoDetailPage() {
         )}
       </div>
 
-      {/* 功能导航 —— 统一为一个网格 */}
+      {/* 功能导航网格 —— 根据 isOwner 动态调整 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* 通用功能：Issues / PR / 代码浏览（所有人均可见） */}
         {[
-          { label: 'Issues',       icon: AlertCircle,    count: repo.open_issues_count, path: 'issues' },
-          { label: 'Pull Requests',icon: GitPullRequest, count: null,                   path: 'pulls' },
-          { label: '代码浏览',     icon: Code,            count: null,                   path: 'code' },
-          { label: '产物下载',     icon: Package,         count: null,                   path: 'artifacts' },
-          { label: 'Pages 部署',   icon: Globe,           count: null,                   path: 'pages' },
-          { label: '提交历史',     icon: Clock,           count: null,                   path: 'commits' },
-          { label: '分支管理',     icon: GitBranch,       count: null,                   path: 'branches' },
-          { label: '协作者',       icon: Users,           count: null,                   path: 'collaborators' },
-          { label: 'Actions',      icon: Play,            count: null,                   path: 'actions' },
-          { label: '上传文件',     icon: Upload,          count: null,                   path: 'upload' },
-          { label: 'Projects',     icon: LayoutGrid,      count: null,                   path: 'projects' },
-          { label: 'Discussions',  icon: MessageCircle,   count: null,                   path: 'discussions' },
-          { label: 'Wiki',         icon: BookOpen,        count: null,                   path: 'wiki' },
+          { label: 'Issues',        icon: AlertCircle,    count: repo.open_issues_count, path: 'issues' },
+          { label: 'Pull Requests', icon: GitPullRequest, count: null,                   path: 'pulls' },
+          { label: '代码浏览',      icon: Code,            count: null,                   path: 'code' },
+          { label: '提交历史',      icon: Clock,           count: null,                   path: 'commits' },
+          { label: 'Discussions',   icon: MessageCircle,   count: null,                   path: 'discussions' },
+          { label: 'Wiki',          icon: BookOpen,        count: null,                   path: 'wiki' },
+          { label: 'Projects',      icon: LayoutGrid,      count: null,                   path: 'projects' },
+          { label: 'Actions',       icon: Play,            count: null,                   path: 'actions' },
         ].map((item) => {
           const Icon = item.icon;
           return (
@@ -339,6 +450,48 @@ export default function RepoDetailPage() {
             </button>
           );
         })}
+
+        {/* 仅自己的仓库：管理功能 */}
+        {isOwner && [
+          { label: '分支管理',  icon: GitBranch, path: 'branches' },
+          { label: '协作者',    icon: Users,     path: 'collaborators' },
+          { label: '产物下载',  icon: Package,   path: 'artifacts' },
+          { label: 'Pages 部署',icon: Globe,     path: 'pages' },
+          { label: '上传文件',  icon: Upload,    path: 'upload' },
+          { label: '仓库设置',  icon: Edit,      path: 'settings', action: openEditDialog },
+        ].map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.label}
+              type="button"
+              className="bg-card border border-border rounded-lg p-3 hover:bg-secondary/50 transition-colors text-left group"
+              onClick={() => item.action ? item.action() : navigate(`/repos/${repo.full_name}/${item.path}`)}
+            >
+              <div className="flex items-center gap-2">
+                <Icon className="w-4 h-4 text-muted-foreground group-hover:text-accent transition-colors shrink-0" />
+                <span className="text-sm text-foreground group-hover:text-accent transition-colors truncate">{item.label}</span>
+              </div>
+            </button>
+          );
+        })}
+
+        {/* 他人仓库：查看 Forks 列表 */}
+        {!isOwner && (
+          <button
+            type="button"
+            className="bg-card border border-border rounded-lg p-3 hover:bg-secondary/50 transition-colors text-left group"
+            onClick={() => navigate(`/repos/${repo.full_name}/forks`)}
+          >
+            <div className="flex items-center gap-2">
+              <Network className="w-4 h-4 text-muted-foreground group-hover:text-accent transition-colors shrink-0" />
+              <span className="text-sm text-foreground group-hover:text-accent transition-colors truncate">Fork 列表</span>
+              <Badge variant="outline" className="ml-auto border-border text-muted-foreground text-xs shrink-0">
+                {formatNumber(repo.forks_count)}
+              </Badge>
+            </div>
+          </button>
+        )}
       </div>
 
       {/* 主内容标签 */}
@@ -510,64 +663,69 @@ export default function RepoDetailPage() {
         </TabsContent>
       </Tabs>
 
-      {/* ── 删除仓库确认对话框 ── */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => { if (!open) setDeleteDialogOpen(false); }}>
-        <AlertDialogContent className="max-w-[calc(100%-2rem)] md:max-w-lg bg-card border-border">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-foreground flex items-center gap-2">
-              <Trash2 className="w-4 h-4 text-destructive" />删除仓库
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-muted-foreground">
-              此操作将永久删除仓库及其所有数据，不可撤销。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="px-1 py-2 space-y-1.5">
-            <Label className="text-sm font-normal text-foreground">请输入仓库完整名称以确认删除：</Label>
-            <Input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={`${owner}/${repoName}`} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground font-mono" />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="border-border hover:bg-secondary" onClick={() => setDeleteDialogOpen(false)}>取消</AlertDialogCancel>
-            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleDeleteRepo} disabled={deleting || deleteConfirmName !== `${owner}/${repoName}`}>
-              {deleting ? "删除中..." : "确认删除"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* ── 删除仓库确认对话框（仅 owner 可触发） ── */}
+      {isOwner && (
+        <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => { if (!open) setDeleteDialogOpen(false); }}>
+          <AlertDialogContent className="max-w-[calc(100%-2rem)] md:max-w-lg bg-card border-border">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-foreground flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-destructive" />删除仓库
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-muted-foreground">
+                此操作将永久删除仓库及其所有数据，不可撤销。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="px-1 py-2 space-y-1.5">
+              <Label className="text-sm font-normal text-foreground">请输入仓库完整名称以确认删除：</Label>
+              <Input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={`${owner}/${repoName}`} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground font-mono" />
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="border-border hover:bg-secondary" onClick={() => setDeleteDialogOpen(false)}>取消</AlertDialogCancel>
+              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleDeleteRepo} disabled={deleting || deleteConfirmName !== `${owner}/${repoName}`}>
+                {deleting ? "删除中..." : "确认删除"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
-      {/* ── 仓库设置对话框 ── */}
-      <Dialog open={editDialogOpen} onOpenChange={(open) => { if (!open) setEditDialogOpen(false); }}>
-        <DialogContent className="max-w-[calc(100%-2rem)] md:max-w-lg bg-card border-border">
-          <DialogHeader>
-            <DialogTitle className="text-foreground flex items-center gap-2">
-              <Settings className="w-4 h-4 text-primary" />仓库设置
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-sm font-normal text-foreground">仓库名称</Label>
-              <Input value={editRepoName} onChange={(e) => setEditRepoName(e.target.value)} placeholder={repoName} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground font-mono" />
+      {/* ── 仓库设置对话框（仅 owner 可触发） ── */}
+      {isOwner && (
+        <Dialog open={editDialogOpen} onOpenChange={(open) => { if (!open) setEditDialogOpen(false); }}>
+          <DialogContent className="max-w-[calc(100%-2rem)] md:max-w-lg bg-card border-border">
+            <DialogHeader>
+              <DialogTitle className="text-foreground flex items-center gap-2">
+                <Settings className="w-4 h-4 text-primary" />仓库设置
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-sm font-normal text-foreground">仓库名称</Label>
+                <Input value={editRepoName} onChange={(e) => setEditRepoName(e.target.value)} placeholder={repoName} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground font-mono" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-sm font-normal text-foreground">仓库描述</Label>
+                <Textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="简短描述这个仓库..." rows={3} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground resize-none" />
+              </div>
+              <div className="flex items-center gap-3">
+                <button type="button" className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors ${!editPrivate ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:bg-secondary"}`} onClick={() => setEditPrivate(false)}>
+                  <Globe className="w-3.5 h-3.5" />公开
+                </button>
+                <button type="button" className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors ${editPrivate ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:bg-secondary"}`} onClick={() => setEditPrivate(true)}>
+                  <Lock className="w-3.5 h-3.5" />私有
+                </button>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-sm font-normal text-foreground">仓库描述</Label>
-              <Textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="简短描述这个仓库..." rows={3} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground resize-none" />
-            </div>
-            <div className="flex items-center gap-3">
-              <button type="button" className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors ${!editPrivate ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:bg-secondary"}`} onClick={() => setEditPrivate(false)}>
-                <Globe className="w-3.5 h-3.5" />公开
-              </button>
-              <button type="button" className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm transition-colors ${editPrivate ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:bg-secondary"}`} onClick={() => setEditPrivate(true)}>
-                <Lock className="w-3.5 h-3.5" />私有
-              </button>
-            </div>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" className="border border-border text-muted-foreground hover:bg-secondary" onClick={() => setEditDialogOpen(false)}>取消</Button>
-            <Button className="bg-primary text-primary-foreground hover:bg-primary/90" onClick={handleUpdateRepo} disabled={updating}>
-              {updating ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />保存中...</> : "保存更改"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter className="gap-2">
+              <Button variant="ghost" className="border border-border text-muted-foreground hover:bg-secondary" onClick={() => setEditDialogOpen(false)}>取消</Button>
+              <Button className="bg-primary text-primary-foreground hover:bg-primary/90" onClick={handleUpdateRepo} disabled={updating}>
+                {updating ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />保存中...</> : "保存更改"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
+    </TooltipProvider>
   );
 }

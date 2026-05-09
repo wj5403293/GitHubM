@@ -51,6 +51,7 @@ import {
 } from '@/services/github';
 import type { GitHubBranch } from '@/types/types';
 import { toast } from 'sonner';
+import { pageCache } from '@/lib/page-cache';
 
 interface BranchWithCompare extends GitHubBranch {
   ahead_by?: number;
@@ -73,9 +74,28 @@ export default function BranchesPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const loadBranches = useCallback(async (pageNum = 1, append = false) => {
+  const loadBranches = useCallback(async (pageNum = 1, append = false, force = false) => {
     if (!owner || !repo) return;
     if (pageNum === 1) setLoading(true);
+
+    const cacheKey = `branches:${owner}/${repo}:p1`;
+    if (pageNum === 1 && !append && !force) {
+      const cached = pageCache.get<{
+        branches: BranchWithCompare[];
+        defaultBranch: string;
+        hasNextPage: boolean;
+      }>(cacheKey);
+      if (cached) {
+        setBranches(cached.branches);
+        setDefaultBranch(cached.defaultBranch);
+        setNewBranchFrom(cached.defaultBranch);
+        setHasNextPage(cached.hasNextPage);
+        setPage(1);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const [result, repoData] = await Promise.all([
         getBranches(owner, repo, pageNum),
@@ -85,28 +105,45 @@ export default function BranchesPage() {
       if (repoData) {
         setDefaultBranch(repoData.default_branch);
         setNewBranchFrom(repoData.default_branch);
-        // 获取与默认分支的比较信息（只针对非默认分支）
+        // 获取与默认分支的比较信息（只针对非默认分支，最多 10 条）
         const comparePromises = branchList
           .filter((b) => b.name !== repoData.default_branch)
-          .slice(0, 10) // 限制请求数量
+          .slice(0, 10)
           .map((b) =>
             compareBranches(owner, repo, repoData.default_branch, b.name)
               .then((comp) => ({ name: b.name, ahead: comp.ahead_by, behind: comp.behind_by }))
               .catch(() => ({ name: b.name, ahead: 0, behind: 0 }))
           );
         Promise.all(comparePromises).then((comparisons) => {
-          setBranches((prev) =>
-            prev.map((b) => {
+          setBranches((prev) => {
+            const enriched = prev.map((b) => {
               const comp = comparisons.find((c) => c.name === b.name);
               return comp ? { ...b, ahead_by: comp.ahead, behind_by: comp.behind } : b;
-            })
-          );
+            });
+            // 写入携带比较数据的完整缓存
+            if (pageNum === 1 && !append) {
+              pageCache.set(cacheKey, {
+                branches: enriched,
+                defaultBranch: repoData.default_branch,
+                hasNextPage: result.hasNextPage,
+              });
+            }
+            return enriched;
+          });
         });
       }
       if (append) {
         setBranches((prev) => [...prev, ...branchList]);
       } else {
         setBranches(branchList);
+        // 先写一次不含比较数据的缓存，比较数据回来后再覆盖
+        if (!repoData) {
+          pageCache.set(cacheKey, {
+            branches: branchList,
+            defaultBranch,
+            hasNextPage: result.hasNextPage,
+          });
+        }
       }
       setHasNextPage(result.hasNextPage);
       setPage(pageNum);
@@ -116,7 +153,7 @@ export default function BranchesPage() {
     } finally {
       setLoading(false);
     }
-  }, [owner, repo]);
+  }, [owner, repo, defaultBranch]);
 
   useEffect(() => {
     loadBranches(1);
@@ -143,7 +180,8 @@ export default function BranchesPage() {
       toast.success(`分支 ${newBranchName} 创建成功！`);
       setCreateDialogOpen(false);
       setNewBranchName('');
-      loadBranches(1);
+      pageCache.invalidate(`branches:${owner}/${repo}:`);
+      loadBranches(1, false, true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '创建分支失败');
     } finally {
@@ -156,7 +194,15 @@ export default function BranchesPage() {
     setDeleting(true);
     try {
       await deleteBranch(owner, repo, deleteTarget);
-      setBranches((prev) => prev.filter((b) => b.name !== deleteTarget));
+      setBranches((prev) => {
+        const updated = prev.filter((b) => b.name !== deleteTarget);
+        pageCache.set(`branches:${owner}/${repo}:p1`, {
+          branches: updated,
+          defaultBranch,
+          hasNextPage,
+        });
+        return updated;
+      });
       toast.success(`分支 ${deleteTarget} 已删除`);
       setDeleteTarget(null);
     } catch (err) {

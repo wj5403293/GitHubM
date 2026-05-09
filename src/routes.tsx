@@ -29,6 +29,8 @@ import PagesDeployPage from './pages/PagesDeployPage';
 import ArtifactsPage from './pages/ArtifactsPage';
 import GraphQLPlaygroundPage from './pages/GraphQLPlaygroundPage';
 import FollowListPage from './pages/FollowListPage';
+import StarredPage from './pages/StarredPage';
+import RepoForksPage from './pages/RepoForksPage';
 
 export interface RouteConfig {
   name: string;
@@ -68,12 +70,14 @@ export const routes: RouteConfig[] = [
   { name: 'Gists', path: '/gists', element: <GistsPage /> },
   { name: 'Gist 详情', path: '/gists/:gistId', element: <GistDetailPage /> },
   { name: '关注列表', path: '/follow-list/:type', element: <FollowListPage /> },
+  { name: '我的收藏', path: '/starred', element: <StarredPage /> },
   { name: 'Packages', path: '/packages', element: <PackagesPage /> },
   { name: '账号管理', path: '/accounts', element: <AccountsPage /> },
   { name: '数据导出', path: '/export', element: <ExportPage /> },
   { name: '批量上传', path: '/repos/:owner/:repo/upload', element: <UploadPage /> },
   { name: 'Pages 部署', path: '/repos/:owner/:repo/pages', element: <PagesDeployPage /> },
   { name: '仓库产物', path: '/repos/:owner/:repo/artifacts', element: <ArtifactsPage /> },
+  { name: '仓库 Forks', path: '/repos/:owner/:repo/forks', element: <RepoForksPage /> },
   { name: '设置', path: '/settings', element: <SettingsPage /> },
   { name: 'GraphQL Playground', path: '/graphql-playground', element: <GraphQLPlaygroundPage /> },
 ];

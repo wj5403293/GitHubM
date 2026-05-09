@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { GitHubUser, GitHubRateLimit, SavedAccount } from '@/types/types';
 import { getCurrentUser, getRateLimit, setToken } from '@/services/github';
+import { pageCache } from '@/lib/page-cache';
 
 interface AuthContextValue {
   token: string | null;
@@ -137,6 +138,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setIsAuthenticated(false);
     setRateLimit(null);
+    pageCache.clear(); // 登出时清空所有页面缓存
   }, []);
 
   // 初始化时自动验证已保存的令牌
