@@ -168,6 +168,38 @@
     border-radius: 3px;
   }
 
+  /* 消除浏览器默认黄色 outline（Firefox 等系统主题有时呈黄色） */
+  *:focus {
+    outline: none;
+  }
+  /* 键盘导航时仍保留可见焦点环，使用设计系统 ring 颜色 */
+  *:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /*
+   * 消除 Chrome/Safari 自动填充黄色背景 & 边框。
+   * 用大 inset box-shadow 覆盖浏览器注入的黄色背景，
+   * 同时将文字颜色重置为设计系统 foreground。
+   */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active,
+  textarea:-webkit-autofill,
+  textarea:-webkit-autofill:hover,
+  textarea:-webkit-autofill:focus,
+  select:-webkit-autofill,
+  select:-webkit-autofill:hover,
+  select:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0 1000px hsl(var(--secondary)) inset !important;
+    -webkit-text-fill-color: hsl(var(--foreground)) !important;
+    caret-color: hsl(var(--foreground));
+    border-color: hsl(var(--border)) !important;
+    transition: background-color 9999s ease 9999s;
+  }
+
   html {
     /* 深色模式为默认（初始） */
     @apply dark;

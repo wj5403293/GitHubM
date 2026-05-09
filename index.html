@@ -43,15 +43,15 @@
         var LIGHT_COLOR = '#f5f3ff';
         var saved = localStorage.getItem('github_manager_theme');
         var isDark;
-        if (saved === 'dark') {
-          isDark = true;
-        } else if (saved === 'light') {
+        if (saved === 'light') {
           isDark = false;
-        } else {
-          // 'system' 或未设置
+        } else if (saved === 'system') {
+          // 明确选择跟随系统
           isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        } else {
+          // 'dark' 或未设置（首次使用默认深色）
+          isDark = true;
         }
-
         // 同步写入 html class，不等待 React
         var html = document.documentElement;
         if (isDark) {

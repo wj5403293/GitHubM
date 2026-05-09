@@ -27,7 +27,6 @@ import {
   BookOpen,
   LayoutGrid,
   Network,
-  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -445,7 +444,6 @@ export default function RepoDetailPage() {
           { label: 'Actions',         icon: Play,           path: 'actions',       count: null,                   ownerOnly: false },
           // ── 管理功能（仅 owner）──
           { label: '协作者',          icon: Users,          path: 'collaborators', count: null,                   ownerOnly: true  },
-          { label: '触发工作流',      icon: Zap,            path: 'actions',       count: null,                   ownerOnly: true  },
           { label: '上传文件',        icon: Upload,         path: 'upload',        count: null,                   ownerOnly: true  },
           // ── 社区功能（所有人可见）──
           { label: 'Discussions',     icon: MessageCircle,  path: 'discussions',   count: null,                   ownerOnly: false },
