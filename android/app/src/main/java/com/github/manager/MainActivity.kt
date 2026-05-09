@@ -294,12 +294,41 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("onBackPressed is deprecated but still needed for WebView navigation")
     override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            @Suppress("DEPRECATION")
-            super.onBackPressed()
+        // 通过 JS history.back() 触发 HashRouter popstate，
+        // 避免 webView.goBack() 重新加载整个 HTML 页面。
+        // React Router v6 在 history.state.idx 中记录当前历史栈深度：
+        //   idx > 0  → 有可返回的路由历史，调用 JS history.back()
+        //   idx == 0 → 已在根页面，进入双击退出逻辑
+        webView.evaluateJavascript(
+            "(function(){ var s=window.history.state; return (s&&s.idx>0)?'1':'0'; })()"
+        ) { result ->
+            runOnUiThread {
+                if (result?.trim('"') == "1") {
+                    // 有路由历史：让 React Router 处理返回，页面不重载
+                    webView.evaluateJavascript("window.history.back()", null)
+                } else {
+                    // 已在根页面：双击退出
+                    handleExitOnBack()
+                }
+            }
         }
+    }
+
+    /** 双击退出逻辑：2 秒内连按两次返回键才退出，避免误触。 */
+    private var backPressedOnce = false
+    private val backHandler = Handler(Looper.getMainLooper())
+
+    private fun handleExitOnBack() {
+        if (backPressedOnce) {
+            // 第二次按下：退出应用
+            backHandler.removeCallbacksAndMessages(null)
+            finish()
+            return
+        }
+        backPressedOnce = true
+        Toast.makeText(this, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+        // 2 秒后重置标志
+        backHandler.postDelayed({ backPressedOnce = false }, 2000)
     }
 
     // ── WebView 配置 ────────────────────────────────────────────────
