@@ -291,7 +291,7 @@ export default function SettingsPage() {
       <div className="bg-card border border-border rounded-xl p-5">
         <h2 className="text-sm font-semibold text-foreground mb-3">关于</h2>
         <div className="space-y-1.5 text-xs text-muted-foreground">
-          <p>GitHub 管理器 v1.0.0</p>
+          <p>GitHub 管理器 v{import.meta.env.VITE_APP_VERSION || '1.0.local'}</p>
           <p>基于 GitHub REST API v2022-11-28</p>
           <p>使用 React + TypeScript + Tailwind CSS 构建</p>
         </div>
