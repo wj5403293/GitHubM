@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   全屏启动画面布局（v2）
-  · Logo 直接展示，无光圈，尺寸 148dp
+  · Logo 专用 drawable（splash_logo.xml），无 Adaptive Icon 留白，104dp 即视觉尺寸
   · 进度条紧贴副标题下方（原分割线位置）
   · 终端标语行保留，无"正在启动"文字
   · 所有强调色通过 @color/ 引用，深/浅模式自动切换
@@ -111,12 +111,12 @@
         android:orientation="vertical"
         android:gravity="center">
 
-        <!-- Octocat Logo（无光圈，直接展示，148dp） -->
+        <!-- Octocat Logo（启动画面专用，无 Adaptive Icon 留白，104dp 即为真实视觉尺寸） -->
         <ImageView
             android:id="@+id/splashLogo"
-            android:layout_width="148dp"
-            android:layout_height="148dp"
-            android:src="@drawable/ic_launcher_foreground"
+            android:layout_width="104dp"
+            android:layout_height="104dp"
+            android:src="@drawable/splash_logo"
             android:tint="@color/splash_icon_tint"
             android:scaleType="fitCenter"
             android:contentDescription="GitHub Logo" />
