@@ -113,7 +113,7 @@ function updateThemeColorMeta(isDark: boolean) {
   if (meta) meta.setAttribute('content', isDark ? DARK_COLOR : LIGHT_COLOR);
 }
 
-/** 将主题色方案注入 CSS 变量 */
+/** 将主题色方案注入 CSS 变量，并同步通知 Android 底部导航栏选中色 */
 function applyAccentScheme(scheme: AccentScheme, resolved: 'dark' | 'light') {
   const root = document.documentElement;
   const isDark = resolved === 'dark';
@@ -123,6 +123,8 @@ function applyAccentScheme(scheme: AccentScheme, resolved: 'dark' | 'light') {
   // sidebar-primary / sidebar-ring 同步
   root.style.setProperty('--sidebar-primary', isDark ? scheme.darkPrimary : scheme.lightPrimary);
   root.style.setProperty('--sidebar-ring',    isDark ? scheme.darkRing    : scheme.lightRing);
+  // 通知 Android 原生底部导航栏选中色跟随方案
+  notifyAndroidAccent(scheme.previewColor);
 }
 
 function applyTheme(mode: ThemeMode) {
@@ -150,6 +152,19 @@ function notifyAndroidTheme(isDark: boolean) {
   try {
     (window as unknown as { AndroidBridge?: { notifyTheme?: (d: boolean) => void } })
       .AndroidBridge?.notifyTheme?.(isDark);
+  } catch {
+    // 非 APK 环境或旧版本壳，静默忽略
+  }
+}
+
+/**
+ * 向 Android 原生层推送强调色变化，使底部导航栏选中色同步跟随。
+ * @param primaryHex 当前方案的预览 hex 色值，如 "#7c3aed"
+ */
+function notifyAndroidAccent(primaryHex: string) {
+  try {
+    (window as unknown as { AndroidBridge?: { notifyAccent?: (hex: string) => void } })
+      .AndroidBridge?.notifyAccent?.(primaryHex);
   } catch {
     // 非 APK 环境或旧版本壳，静默忽略
   }

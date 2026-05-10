@@ -17,21 +17,12 @@ import {
   Code2,
   Clock,
   X,
-  ArrowUpDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
   searchRepositories,
   searchIssues,
@@ -53,6 +44,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 
 // GitHub Search API 最多返回 1000 条结果
@@ -73,6 +70,14 @@ const SORT_OPTIONS: SortConfig[] = [
   { value: 'forks',      label: 'Forks 最多',  apiSort: 'forks',   apiOrder: 'desc' },
   { value: 'updated',    label: '最近更新',     apiSort: 'updated', apiOrder: 'desc' },
 ];
+
+// 每种排序方式对应的图标
+const SORT_ICONS: Record<SortOption, { icon: React.ElementType }> = {
+  'best-match': { icon: Search  },
+  'stars':      { icon: Star    },
+  'forks':      { icon: GitFork },
+  'updated':    { icon: Clock   },
+};
 
 // ── 搜索历史工具函数 ──────────────────────────────────────────────────────
 function loadHistory(): string[] {
@@ -321,13 +326,13 @@ export default function SearchPage() {
     }
   };
 
+  // 仅保留 handleSortChange，循环切换已由下拉菜单替代
+
   const handleClearHistory = () => {
     clearHistory();
     setHistory([]);
     toast.success('搜索历史已清除');
   };
-
-  const currentSortLabel = SORT_OPTIONS.find(s => s.value === sortOption)?.label ?? '最佳匹配';
 
   const TABS: Array<{ type: SearchType; label: string; icon: typeof BookOpen }> = [
     { type: 'repositories', label: '仓库', icon: BookOpen },
@@ -363,10 +368,51 @@ export default function SearchPage() {
         </span>
       </div>
 
-      {/* 搜索框 + 排序 */}
+      {/* 搜索框 */}
       <div className="flex gap-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          {/* 左侧图标：仓库搜索时为可点击的排序图标（下拉选择），其他类型为静态搜索图标 */}
+          {searchType === 'repositories' ? (() => {
+            const { icon: SortIcon } = SORT_ICONS[sortOption];
+            return (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    title="点击选择排序方式"
+                    className="absolute left-2.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded text-primary hover:bg-primary/10 transition-colors"
+                  >
+                    <SortIcon className="w-4 h-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="bg-popover border-border w-36">
+                  {SORT_OPTIONS.map(opt => {
+                    const { icon: OptIcon } = SORT_ICONS[opt.value];
+                    return (
+                      <DropdownMenuItem
+                        key={opt.value}
+                        className={cn(
+                          'cursor-pointer text-sm gap-2',
+                          sortOption === opt.value
+                            ? 'text-primary font-medium'
+                            : 'text-foreground'
+                        )}
+                        onClick={() => handleSortChange(opt.value)}
+                      >
+                        <OptIcon className="w-3.5 h-3.5 shrink-0" />
+                        {opt.label}
+                        {sortOption === opt.value && (
+                          <span className="ml-auto text-primary text-xs">✓</span>
+                        )}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })() : (
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          )}
           <Input
             ref={inputRef}
             value={query}
@@ -424,40 +470,6 @@ export default function SearchPage() {
             </div>
           )}
         </div>
-
-        {/* 排序下拉（仅仓库搜索有效） */}
-        {searchType === 'repositories' && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="shrink-0 h-9 gap-1.5 border-border bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80 text-xs hidden sm:flex"
-              >
-                <ArrowUpDown className="w-3.5 h-3.5" />
-                {currentSortLabel}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="bg-popover border-border w-40">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">排序方式</DropdownMenuLabel>
-              <DropdownMenuSeparator className="bg-border" />
-              {SORT_OPTIONS.map(opt => (
-                <DropdownMenuItem
-                  key={opt.value}
-                  className={cn(
-                    'cursor-pointer text-sm',
-                    sortOption === opt.value ? 'text-primary font-medium' : 'text-foreground'
-                  )}
-                  onClick={() => handleSortChange(opt.value)}
-                >
-                  {opt.label}
-                  {sortOption === opt.value && <span className="ml-auto text-primary text-xs">✓</span>}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-
         <Button
           className="bg-primary text-primary-foreground hover:bg-primary/90 shrink-0"
           onClick={() => handleSearch(query, searchType, 1)}
@@ -490,7 +502,7 @@ export default function SearchPage() {
         ))}
       </div>
 
-      {/* 结果数量 + 移动端排序 */}
+      {/* 结果数量 */}
       {searched && !loading && (
         <div className="flex items-center justify-between flex-wrap gap-2">
           <p className="text-sm text-muted-foreground">
@@ -501,33 +513,6 @@ export default function SearchPage() {
               </span>
             )}
           </p>
-          {/* 移动端排序按钮 */}
-          {searchType === 'repositories' && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="sm:hidden h-8 gap-1.5 border-border bg-secondary text-muted-foreground text-xs"
-                >
-                  <ArrowUpDown className="w-3 h-3" />
-                  {currentSortLabel}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="bg-popover border-border w-40">
-                {SORT_OPTIONS.map(opt => (
-                  <DropdownMenuItem
-                    key={opt.value}
-                    className={cn('cursor-pointer text-sm', sortOption === opt.value ? 'text-primary font-medium' : 'text-foreground')}
-                    onClick={() => handleSortChange(opt.value)}
-                  >
-                    {opt.label}
-                    {sortOption === opt.value && <span className="ml-auto text-primary text-xs">✓</span>}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
         </div>
       )}
 

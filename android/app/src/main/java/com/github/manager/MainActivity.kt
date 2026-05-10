@@ -59,6 +59,11 @@ class MainActivity : AppCompatActivity() {
     )
     /** 当前激活的菜单项，避免重复导航 */
     private var currentNavItemId: Int = R.id.nav_home
+    /** 当前底部导航栏选中色（由 notifyAccent 更新，随主题色方案变化） */
+    private var currentAccentColor: Int = Color.parseColor("#8B4CF8")  // 默认紫罗兰深色
+    /** 当前是否为深色模式（用于 notifyAccent 确定未选中色） */
+    private var darkTheme: Boolean = true
+    private fun isDarkTheme(): Boolean = darkTheme
 
     // ── 文件上传 ────────────────────────────────────────────────────
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
@@ -141,6 +146,30 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun notifyTheme(isDark: Boolean) {
             runOnUiThread { applyNativeTheme(isDark) }
+        }
+
+        /**
+         * 强调色方案切换时由 ThemeContext 调用，同步更新底部导航栏选中图标/文字颜色。
+         *
+         * 调用：window.AndroidBridge.notifyAccent(primaryHex: string)
+         * @param primaryHex 当前方案的主色调 hex 值，如 "#7c3aed"
+         */
+        @JavascriptInterface
+        fun notifyAccent(primaryHex: String) {
+            runOnUiThread {
+                try {
+                    val color = Color.parseColor(primaryHex)
+                    // 仅更新选中色，未选中色保持不变（取自当前 itemTextColor/iconTintList）
+                    val unselected = if (isDarkTheme()) 0xFF9292A8.toInt() else 0xFF64748B.toInt()
+                    val iconColors = android.content.res.ColorStateList(
+                        arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                        intArrayOf(color, unselected)
+                    )
+                    bottomNav.itemIconTintList = iconColors
+                    bottomNav.itemTextColor   = iconColors
+                    currentAccentColor = color
+                } catch (_: Exception) { /* 非法 hex，静默忽略 */ }
+            }
         }
 
         /**
@@ -409,6 +438,36 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     runOnUiThread { applyNativeTheme(resolved) }
+
+                    // 同时读取强调色方案，将选中色同步为存储的 previewColor
+                    val accentMap = mapOf(
+                        "purple" to "#8B4CF8",
+                        "blue"   to "#1d6be3",
+                        "green"  to "#16a34a",
+                        "orange" to "#f97316",
+                        "rose"   to "#e11d48",
+                        "cyan"   to "#0891b2",
+                    )
+                    view?.evaluateJavascript(
+                        "(function(){ return localStorage.getItem('github_manager_accent') || 'purple'; })()"
+                    ) { accentResult ->
+                        val accentId = accentResult?.trim('"') ?: "purple"
+                        val hex = accentMap[accentId] ?: "#8B4CF8"
+                        try {
+                            val color = Color.parseColor(hex)
+                            val isDark = darkTheme
+                            val unselected = if (isDark) 0xFF9292A8.toInt() else 0xFF64748B.toInt()
+                            val iconColors = android.content.res.ColorStateList(
+                                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                                intArrayOf(color, unselected)
+                            )
+                            runOnUiThread {
+                                currentAccentColor = color
+                                bottomNav.itemIconTintList = iconColors
+                                bottomNav.itemTextColor   = iconColors
+                            }
+                        } catch (_: Exception) { /* 静默忽略 */ }
+                    }
                 }
             }
         }
@@ -467,11 +526,11 @@ class MainActivity : AppCompatActivity() {
      *   浅色：background=#f8f8fb，sidebar-background=#f6f4fa
      */
     private fun applyNativeTheme(isDark: Boolean) {
+        darkTheme = isDark
         if (isDark) {
             // ── 深色模式 ──────────────────────────────────────────────
             val bgColor      = Color.parseColor("#111117")  // --background dark
             val navBgColor   = Color.parseColor("#0d0d11")  // --sidebar-background dark
-            val selectedColor   = Color.parseColor("#8B4CF8")  // --primary dark
             val unselectedColor = Color.parseColor("#9292A8")  // --muted-foreground dark
 
             window.statusBarColor     = bgColor
@@ -492,10 +551,10 @@ class MainActivity : AppCompatActivity() {
                     View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
             }
 
-            // 底部导航栏图标与文字颜色
+            // 底部导航栏图标与文字颜色（选中色跟随当前强调色方案）
             val iconColors = android.content.res.ColorStateList(
                 arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(selectedColor, unselectedColor)
+                intArrayOf(currentAccentColor, unselectedColor)
             )
             bottomNav.itemIconTintList = iconColors
             bottomNav.itemTextColor   = iconColors
@@ -504,7 +563,6 @@ class MainActivity : AppCompatActivity() {
             // ── 浅色模式 ──────────────────────────────────────────────
             val bgColor      = Color.parseColor("#f8f8fb")  // --background light
             val navBgColor   = Color.parseColor("#f6f4fa")  // --sidebar-background light
-            val selectedColor   = Color.parseColor("#7c3aed")  // --primary light
             val unselectedColor = Color.parseColor("#64748b")  // 深灰，在浅色背景上可读
 
             window.statusBarColor     = bgColor
@@ -526,10 +584,10 @@ class MainActivity : AppCompatActivity() {
                     View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
             }
 
-            // 底部导航栏图标与文字颜色
+            // 底部导航栏图标与文字颜色（选中色跟随当前强调色方案）
             val iconColors = android.content.res.ColorStateList(
                 arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                intArrayOf(selectedColor, unselectedColor)
+                intArrayOf(currentAccentColor, unselectedColor)
             )
             bottomNav.itemIconTintList = iconColors
             bottomNav.itemTextColor   = iconColors
