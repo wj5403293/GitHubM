@@ -1,21 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  全屏启动画面布局
-  所有颜色通过 @color/ 引用，由 values/colors.xml（浅色）
-  与 values-night/colors.xml（深色）根据系统模式自动切换。
+  全屏启动画面布局（v2）
+  · Logo 直接展示，无光圈，尺寸 120dp
+  · 进度条紧贴副标题下方（原分割线位置）
+  · 终端标语行保留，无"正在启动"文字
+  · 所有强调色通过 @color/ 引用，深/浅模式自动切换
+  · 关键视图添加 ID，供 MainActivity 在运行时注入主题色
 
   ┌─────────────────────────┐
-  │ [角落装饰 TL]    [TR]   │
+  │ [L]               [R]   │  ← 角落装饰
   │                         │
-  │      [Octocat Logo]      │
+  │       [Octocat]          │  ← 120dp logo，无光圈
   │      GitHub 管理器       │
-  │    随时随地，高效管理    │
-  │   ── ─────── ── ─ ───   │
-  │   git clone your future  │
+  │   随时随地，高效管理     │
+  │   ══════════════════     │  ← 进度条（accent 色）
+  │   $ git clone your_future▌ │
   │                         │
-  │ [BL]             [BR]   │
-  │    ──────────────────   │
-  │       正在启动…         │
+  │ [L]               [R]   │  ← 角落装饰
   └─────────────────────────┘
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -25,6 +26,7 @@
 
     <!-- ── 左上角装饰 ── -->
     <LinearLayout
+        android:id="@+id/splashCornerTL"
         android:layout_width="40dp"
         android:layout_height="40dp"
         android:layout_gravity="top|start"
@@ -42,6 +44,7 @@
 
     <!-- ── 右上角装饰 ── -->
     <LinearLayout
+        android:id="@+id/splashCornerTR"
         android:layout_width="40dp"
         android:layout_height="40dp"
         android:layout_gravity="top|end"
@@ -61,11 +64,12 @@
 
     <!-- ── 左下角装饰 ── -->
     <LinearLayout
+        android:id="@+id/splashCornerBL"
         android:layout_width="40dp"
         android:layout_height="40dp"
         android:layout_gravity="bottom|start"
         android:layout_marginStart="28dp"
-        android:layout_marginBottom="80dp"
+        android:layout_marginBottom="52dp"
         android:orientation="vertical"
         android:gravity="bottom">
         <View
@@ -80,11 +84,12 @@
 
     <!-- ── 右下角装饰 ── -->
     <LinearLayout
+        android:id="@+id/splashCornerBR"
         android:layout_width="40dp"
         android:layout_height="40dp"
         android:layout_gravity="bottom|end"
         android:layout_marginEnd="28dp"
-        android:layout_marginBottom="80dp"
+        android:layout_marginBottom="52dp"
         android:orientation="vertical"
         android:gravity="bottom">
         <View
@@ -103,32 +108,24 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:layout_marginBottom="48dp"
         android:orientation="vertical"
         android:gravity="center">
 
-        <!-- Logo 圆形容器（Octocat + 光晕） -->
-        <FrameLayout
+        <!-- Octocat Logo（无光圈，直接展示，120dp） -->
+        <ImageView
+            android:id="@+id/splashLogo"
             android:layout_width="120dp"
             android:layout_height="120dp"
-            android:background="@drawable/splash_logo_bg">
-
-            <ImageView
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_gravity="center"
-                android:src="@drawable/ic_launcher_foreground"
-                android:tint="@color/splash_icon_tint"
-                android:scaleType="fitCenter"
-                android:contentDescription="GitHub Logo" />
-
-        </FrameLayout>
+            android:src="@drawable/ic_launcher_foreground"
+            android:tint="@color/splash_icon_tint"
+            android:scaleType="fitCenter"
+            android:contentDescription="GitHub Logo" />
 
         <!-- 标题：GitHub 管理器 -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
+            android:layout_marginTop="24dp"
             android:text="GitHub 管理器"
             android:textColor="@color/splash_title"
             android:textSize="28sp"
@@ -147,22 +144,29 @@
             android:letterSpacing="0.02"
             android:fontFamily="sans-serif" />
 
-        <!-- 装饰分隔线 -->
-        <View
+        <!-- 进度条（原分割线位置，accent 色，由 MainActivity 注入主题色） -->
+        <ProgressBar
+            android:id="@+id/splashProgress"
             android:layout_width="200dp"
-            android:layout_height="1dp"
-            android:layout_marginTop="24dp"
-            android:background="@drawable/splash_divider" />
+            android:layout_height="2dp"
+            android:layout_marginTop="20dp"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:indeterminate="true"
+            android:indeterminateTint="@color/splash_accent"
+            android:progressTint="@color/splash_accent"
+            android:indeterminateTintMode="src_in" />
 
-        <!-- 终端风格标签行 -->
+        <!-- 终端风格标语行 -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
+            android:layout_marginTop="20dp"
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
+            <!-- 终端提示符 $ -->
             <TextView
+                android:id="@+id/splashPrompt"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="$ "
@@ -170,16 +174,19 @@
                 android:textSize="12sp"
                 android:fontFamily="monospace" />
 
+            <!-- 命令文字（打字动画目标，初始为空，由 MainActivity 逐字填充） -->
             <TextView
+                android:id="@+id/splashTerminalText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="git clone your_future"
+                android:text=""
                 android:textColor="@color/splash_terminal"
                 android:textSize="12sp"
                 android:fontFamily="monospace" />
 
-            <!-- 光标闪烁块 -->
+            <!-- 光标块 -->
             <View
+                android:id="@+id/splashCursor"
                 android:layout_width="8dp"
                 android:layout_height="14dp"
                 android:layout_marginStart="2dp"
@@ -189,36 +196,6 @@
 
     </LinearLayout>
 
-    <!-- ── 底部进度区域 ── -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:layout_marginBottom="48dp"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:paddingHorizontal="48dp">
-
-        <ProgressBar
-            android:layout_width="match_parent"
-            android:layout_height="2dp"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:indeterminate="true"
-            android:indeterminateTint="@color/splash_accent"
-            android:progressTint="@color/splash_accent"
-            android:indeterminateTintMode="src_in" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="正在启动…"
-            android:textColor="@color/splash_loading_text"
-            android:textSize="11sp"
-            android:letterSpacing="0.05"
-            android:fontFamily="monospace" />
-
-    </LinearLayout>
-
 </FrameLayout>
+
 

@@ -27,6 +27,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -43,6 +45,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var splashOverlay: View
     private lateinit var bottomNav: BottomNavigationView
     private var splashDismissed = false
+
+    // ── 启动画面双条件门禁 ──────────────────────────────────────────
+    /** true = 3s 最小展示时间已到 */
+    private var splashMinTimeReached = false
+    /** true = React 首屏已就绪（notifyReady 已回调） */
+    private var webViewReadyReceived = false
+    /** 启动画面专用 Handler：管理打字动画、光标闪烁、定时任务 */
+    private val splashHandler = Handler(Looper.getMainLooper())
+    /** 光标闪烁 Runnable，dismissSplash 时停止 */
+    private var cursorBlinkRunnable: Runnable? = null
 
     // ── 底部导航：hash 路径 → 菜单项 ID 映射 ───────────────────────
     /**
@@ -131,10 +143,11 @@ class MainActivity : AppCompatActivity() {
     // ── JS 桥接口 ───────────────────────────────────────────────────
     inner class WebAppBridge {
 
-        /** React 首屏就绪后调用，触发启动遮罩淡出 */
+        /** React 首屏就绪后调用，与 3s 最小时间共同触发启动遮罩淡出 */
         @JavascriptInterface
         fun notifyReady() {
-            runOnUiThread { dismissSplash() }
+            webViewReadyReceived = true
+            runOnUiThread { tryDismissSplash() }
         }
 
         /**
@@ -149,13 +162,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         /**
-         * 强调色方案切换时由 ThemeContext 调用，同步更新底部导航栏选中图标/文字颜色。
+         * 强调色方案切换时由 ThemeContext 调用，同步更新底部导航栏选中图标/文字颜色，
+         * 并将 hex 持久化到 SharedPreferences，供下次冷启动时还原到启动画面。
          *
          * 调用：window.AndroidBridge.notifyAccent(primaryHex: string)
          * @param primaryHex 当前方案的主色调 hex 值，如 "#7c3aed"
          */
         @JavascriptInterface
         fun notifyAccent(primaryHex: String) {
+            // 持久化 accent hex，供下次冷启动还原到启动画面
+            getSharedPreferences("gm_prefs", MODE_PRIVATE)
+                .edit().putString("accent_hex", primaryHex).apply()
             runOnUiThread {
                 try {
                     val color = Color.parseColor(primaryHex)
@@ -269,10 +286,21 @@ class MainActivity : AppCompatActivity() {
         return target.name
     }
 
+    /**
+     * 双条件门禁：只有「3s 最小展示时间到达」且「React 已就绪」同时满足才消除启动画面。
+     * 任意一方先到达时只记录状态等待另一方，保证动画完整播放且不出现白屏闪烁。
+     */
+    private fun tryDismissSplash() {
+        if (splashMinTimeReached && webViewReadyReceived) dismissSplash()
+    }
+
     private fun dismissSplash() {
         if (splashDismissed) return
         splashDismissed = true
-        // 淡出 + 轻微缩小，营造优雅的启动画面消散效果
+        // 停止光标闪烁，取消所有启动画面相关的 Handler 消息
+        cursorBlinkRunnable?.let { splashHandler.removeCallbacks(it) }
+        splashHandler.removeCallbacksAndMessages(null)
+        // 淡出 + 轻微放大，营造优雅的启动画面消散效果
         splashOverlay.animate()
             .alpha(0f)
             .scaleX(1.04f)
@@ -280,6 +308,100 @@ class MainActivity : AppCompatActivity() {
             .setDuration(380)
             .withEndAction { splashOverlay.visibility = View.GONE }
             .start()
+    }
+
+    /**
+     * 启动画面打字动画：
+     * 将终端命令文字逐字符填入 splashTerminalText，总时长 2800ms（留 200ms 余量）。
+     * 同时启动光标闪烁效果。
+     */
+    private fun startSplashTypingAnimation() {
+        val terminalTextView = splashOverlay.findViewById<TextView>(R.id.splashTerminalText)
+            ?: return
+        val cursorView = splashOverlay.findViewById<View>(R.id.splashCursor)
+
+        val fullText   = "git clone your_future"
+        val totalMs    = 2800L                            // 2.8s 内打完
+        val charDelayMs = totalMs / fullText.length       // 每字符间隔 ≈ 133ms
+
+        // 初始清空，避免 XML 残留内容
+        terminalTextView.text = ""
+
+        // 逐字符延时填入
+        fullText.forEachIndexed { index, _ ->
+            splashHandler.postDelayed({
+                terminalTextView.text = fullText.substring(0, index + 1)
+            }, index * charDelayMs)
+        }
+
+        // 光标闪烁（每 480ms 切换一次可见性）
+        if (cursorView != null) startCursorBlink(cursorView)
+    }
+
+    /** 光标闪烁：每 480ms 切换可见性，dismissSplash 时自动停止 */
+    private fun startCursorBlink(cursor: View) {
+        val runnable = object : Runnable {
+            override fun run() {
+                if (splashDismissed) return
+                cursor.visibility =
+                    if (cursor.visibility == View.VISIBLE) View.INVISIBLE else View.VISIBLE
+                splashHandler.postDelayed(this, 480)
+            }
+        }
+        cursorBlinkRunnable = runnable
+        splashHandler.post(runnable)
+    }
+
+    /**
+     * 读取 SharedPreferences 中上次保存的 accent hex，将主题色同步注入启动画面视图。
+     * 首次安装或未存储时使用默认紫色（与 Web 端初始主题一致）。
+     * 应在 setContentView 之后、WebView 加载之前调用。
+     */
+    private fun applySavedAccentToSplash() {
+        val hex = getSharedPreferences("gm_prefs", MODE_PRIVATE)
+            .getString("accent_hex", "#8B4CF8") ?: "#8B4CF8"
+        try {
+            val color = Color.parseColor(hex)
+            val tintList = android.content.res.ColorStateList.valueOf(color)
+
+            // 进度条
+            splashOverlay.findViewById<android.widget.ProgressBar>(R.id.splashProgress)
+                ?.let { pb ->
+                    pb.indeterminateTintList = tintList
+                    pb.progressTintList      = tintList
+                }
+
+            // 光标块
+            splashOverlay.findViewById<View>(R.id.splashCursor)
+                ?.setBackgroundColor(color)
+
+            // 终端提示符 $
+            splashOverlay.findViewById<android.widget.TextView>(R.id.splashPrompt)
+                ?.setTextColor(color)
+
+            // 浅色模式下 Octocat 图标跟随 accent 色；深色模式保持白色
+            val nightMask = resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK
+            val isNight = nightMask == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            if (!isNight) {
+                splashOverlay.findViewById<android.widget.ImageView>(R.id.splashLogo)
+                    ?.imageTintList = tintList
+            }
+
+            // 四角装饰线：统一注入 accent 色（带透明度）
+            val cornerAlpha = 0x40  // 25% 透明度
+            val cornerColor = (cornerAlpha shl 24) or (color and 0x00FFFFFF)
+            listOf(
+                R.id.splashCornerTL, R.id.splashCornerTR,
+                R.id.splashCornerBL, R.id.splashCornerBR
+            ).forEach { id ->
+                splashOverlay.findViewById<android.view.ViewGroup>(id)?.let { group ->
+                    for (i in 0 until group.childCount) {
+                        group.getChildAt(i).setBackgroundColor(cornerColor)
+                    }
+                }
+            }
+        } catch (_: Exception) { /* 非法 hex，使用 XML 默认色，静默忽略 */ }
     }
 
     // ── 生命周期 ────────────────────────────────────────────────────
@@ -297,22 +419,38 @@ class MainActivity : AppCompatActivity() {
         splashOverlay = findViewById(R.id.splashOverlay)
         bottomNav = findViewById(R.id.bottomNav)
 
-        registerDownloadReceiver()
+        // 读取上次持久化的主题色，并同步应用到启动画面各元素
+        applySavedAccentToSplash()
+        // 启动打字动画（与 WebView 加载并行进行）
+        startSplashTypingAnimation()
+
+        // ── WebView 预加载优化 ───────────────────────────────────────
+        // 先完成所有 WebView 配置，再尽早调用 loadUrl，
+        // 确保 JS bundle 解析可以在启动画面展示的 3s 内完成。
         setupWebViewSettings()
         setupWebViewClient()
         setupWebChromeClient()
         setupDownloadListener()
-        setupBottomNav()
-
         webView.addJavascriptInterface(WebAppBridge(), "AndroidBridge")
 
-        Handler(Looper.getMainLooper()).postDelayed({ dismissSplash() }, 5000)
-
+        // WebView 最早时机开始加载，充分利用 3s 启动时间预热 React
         if (savedInstanceState != null) {
             webView.restoreState(savedInstanceState)
         } else {
             webView.loadUrl("file:///android_asset/index.html")
         }
+
+        registerDownloadReceiver()
+        setupBottomNav()
+
+        // 3s 最小展示时间到达后更新门禁状态，与 notifyReady 共同决定是否消除启动画面
+        splashHandler.postDelayed({
+            splashMinTimeReached = true
+            tryDismissSplash()
+        }, 3000L)
+
+        // 6s 硬兜底：防止 notifyReady 永不触发（如 JS 崩溃）时启动画面卡死
+        splashHandler.postDelayed({ dismissSplash() }, 6000L)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -322,6 +460,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        splashHandler.removeCallbacksAndMessages(null)
         unregisterReceiver(downloadReceiver)
         webView.stopLoading()
         webView.destroy()
