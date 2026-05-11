@@ -177,8 +177,15 @@ jobs:
             KEY_ALIAS_VAL="${RELEASE_KEY_ALIAS}"
             KEY_PASS="${RELEASE_KEY_PASSWORD}"
             echo "was_generated=false" >> "$GITHUB_OUTPUT"
+          elif [ -f "${KEYSTORE_PATH}" ]; then
+            # ── 方案 2：使用仓库中已提交的默认 Keystore ──────────────
+            echo "✅ 使用仓库默认 Release Keystore（支持覆盖安装）"
+            STORE_PASS="GithubManager@CI"
+            KEY_ALIAS_VAL="github-manager"
+            KEY_PASS="GithubManager@CI"
+            echo "was_generated=false" >> "$GITHUB_OUTPUT"
           else
-            # ── 方案 B：Secret 未配置，用 keytool 自动生成临时 Keystore ─
+            # ── 方案 B：Secret 未配置且无仓库默认 keystore，用 keytool 生成 ─
             echo "⚠️  未检测到 RELEASE_KEYSTORE_BASE64 Secret"
             echo "   正在使用 keytool -genkeypair 生成临时签名 Keystore..."
             echo "   ℹ️  若配置了 GH_PAT Secret，本次生成的证书将自动写入仓库"

@@ -44,3 +44,5 @@ android/**/*.class
 android/release.keystore
 android/*.keystore
 android/*.jks
+# 但放行仓库默认 keystore（CI 需要）
+!android/release.keystore
