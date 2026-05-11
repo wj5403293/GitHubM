@@ -36,6 +36,7 @@ import {
   RotateCw, CheckCircle2, XCircle, Copy, Check, ChevronDown,
   Plus, GitPullRequest, History, MessageSquare, ArrowLeft, Loader2,
   FolderOpen, BookOpen, GitCommit, LayoutDashboard, Pencil, Zap,
+  Play, ListChecks, FileCode2, BugPlay, GitMerge, CircleAlert,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -746,13 +747,22 @@ function RepoSelector({ onSelect }: { onSelect: (repo: GitHubRepo) => void }) {
 // ── 快捷指令 ──────────────────────────────────────────────────────────────────
 
 const QUICK_PROMPTS = [
-  { icon: FolderOpen,      label: '列出根目录', text: '请列出仓库根目录下的所有文件和文件夹' },
-  { icon: BookOpen,        label: '查看 README', text: '请读取并展示 README.md 的内容' },
-  { icon: GitBranch,       label: '列出分支', text: '请列出该仓库所有的分支' },
-  { icon: GitCommit,       label: '提交历史', text: '请展示仓库最近 10 条提交记录' },
-  { icon: Search,          label: '搜索 TODO', text: '搜索仓库中所有包含 TODO 注释的代码位置' },
-  { icon: LayoutDashboard, label: '项目结构', text: '帮我分析一下这个仓库的整体项目结构和技术栈' },
-  { icon: Pencil,          label: '优化 README', text: '请读取 README.md，帮我优化内容并重新写入' },
+  // ── 代码 & 文件 ───────────────────────────────────────────────────────────────
+  { icon: FolderOpen,    label: '项目结构', text: '帮我分析一下这个仓库的整体项目结构和技术栈' },
+  { icon: BookOpen,      label: '查看 README', text: '请读取并展示 README.md 的内容' },
+  { icon: Search,        label: '搜索 TODO', text: '搜索仓库中所有包含 TODO 注释的代码位置，并列出需要完成的工作' },
+  { icon: FileCode2,     label: '代码审查', text: '请列出根目录文件结构，然后挑选主要源码文件进行代码质量审查，给出改进建议' },
+  { icon: Pencil,        label: '优化 README', text: '请读取 README.md，帮我优化内容使其更专业，然后写入更新' },
+  // ── 分支 & 版本 ──────────────────────────────────────────────────────────────
+  { icon: GitBranch,     label: '列出分支', text: '请列出该仓库所有的分支' },
+  { icon: GitCommit,     label: '提交历史', text: '请展示仓库最近 10 条提交记录，并总结最近的变更方向' },
+  { icon: GitMerge,      label: '查看 PR', text: '请列出该仓库所有 open 状态的 Pull Request' },
+  { icon: CircleAlert,   label: '查看 Issues', text: '请列出该仓库所有 open 状态的 Issues，并按优先级分类总结' },
+  // ── 工作流 & 部署 ─────────────────────────────────────────────────────────────
+  { icon: Play,          label: '工作流列表', text: '请列出仓库所有 GitHub Actions 工作流文件' },
+  { icon: ListChecks,    label: '最近部署', text: '请查看最近 5 次 GitHub Actions 运行记录，告诉我哪些成功、哪些失败' },
+  { icon: BugPlay,       label: '排查失败', text: '请找出最近一次失败的工作流运行，查看其 Job 列表，下载失败 Job 的日志，分析报错原因并给出修复建议' },
+  { icon: LayoutDashboard, label: '查看 Secrets', text: '请列出该仓库配置的 Actions Secrets 名称（不含值），检查是否有缺失的环境变量' },
 ];
 
 // ── 复制按钮 ────────────────────────────────────────────────────────────────────
@@ -781,10 +791,16 @@ function BranchPicker({
 }: { branches: string[]; value: string; onChange: (b: string) => void; loading: boolean; }) {
   return (
     <Select value={value} onValueChange={onChange} disabled={loading || branches.length === 0}>
-      <SelectTrigger className="h-7 px-2 text-xs gap-1 border-border bg-muted/40 hover:bg-muted min-w-0 max-w-[160px]">
-        <GitBranch className="w-3 h-3 text-muted-foreground shrink-0" />
-        <span className="truncate font-medium">{loading ? '加载中…' : value}</span>
-        <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0 ml-0.5" />
+      {/*
+        用 [&>svg]:hidden 隐藏 shadcn SelectTrigger 内置的 ChevronDown，
+        避免与我们自定义的图标重复渲染（也是引发布局异常的根源）。
+      */}
+      <SelectTrigger className="h-7 px-2 text-xs border-border bg-muted/40 hover:bg-muted min-w-0 max-w-[160px] [&>svg]:hidden">
+        <div className="flex items-center gap-1 min-w-0">
+          <GitBranch className="w-3 h-3 text-muted-foreground shrink-0" />
+          <span className="truncate font-medium font-mono">{loading ? '加载中…' : (value || '选择分支')}</span>
+          <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
+        </div>
       </SelectTrigger>
       <SelectContent className="max-h-48">
         {branches.map(b => (
@@ -1438,11 +1454,16 @@ export default function AiAssistantPage() {
                     : <Bot className="w-3.5 h-3.5 text-muted-foreground" />}
                 </div>
                 <div className="flex flex-col gap-1 max-w-[85%] min-w-0 overflow-hidden">
+                  {/* 消息气泡：内容超过阈值后启用独立滚动，避免整个列表被撑开 */}
                   <div className={cn(
-                    'rounded-2xl px-4 py-3 text-sm min-w-0 max-w-full overflow-hidden',
+                    'rounded-2xl px-4 py-3 text-sm min-w-0 max-w-full',
                     msg.role === 'user'
                       ? 'bg-primary text-primary-foreground rounded-tr-sm'
-                      : 'bg-muted/60 border border-border text-foreground rounded-tl-sm'
+                      : 'bg-muted/60 border border-border text-foreground rounded-tl-sm',
+                    // 内容较长时（流式完成后）启用气泡内滚动
+                    !msg.streaming && msg.content.length > 600
+                      ? 'max-h-[60vh] overflow-y-auto'
+                      : 'overflow-hidden'
                   )}>
                     {msg.role === 'user'
                       ? <p className="whitespace-pre-wrap break-words min-w-0 max-w-full">{msg.content}</p>
@@ -1546,15 +1567,6 @@ export default function AiAssistantPage() {
               </button>
             </div>
             <div className="flex items-center gap-0.5">
-              {/* 分支信息 */}
-              <button
-                onClick={() => setShowCreateBranch(true)}
-                className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors font-mono"
-                title="新建分支"
-              >
-                <GitBranch className="w-3 h-3 shrink-0" />
-                <span className="max-w-[80px] truncate">{selectedBranch}</span>
-              </button>
               {sessionId && (
                 <span className="text-[10px] text-green-500 px-1" title="对话已保存">●</span>
               )}
