@@ -177,20 +177,25 @@ jobs:
 
           if [ -n "${RELEASE_KEYSTORE_BASE64}" ]; then
             # ── 方案 A：使用仓库 Secret 中的稳定 Keystore ────────────
-            echo "✅ 使用 Secret 中的 Release Keystore（支持覆盖安装）"
+            echo "✅ 使用 Secret 中的 Release Keystore"
             echo "${RELEASE_KEYSTORE_BASE64}" | base64 --decode > "${KEYSTORE_PATH}"
             STORE_PASS="${RELEASE_STORE_PASSWORD}"
             KEY_ALIAS_VAL="${RELEASE_KEY_ALIAS}"
             KEY_PASS="${RELEASE_KEY_PASSWORD}"
             echo "was_generated=false" >> "$GITHUB_OUTPUT"
-          else
-            # ── 方案 B：Secret 未配置，用 keytool 自动生成临时 Keystore ─
-            echo "⚠️  未检测到 RELEASE_KEYSTORE_BASE64 Secret"
-            echo "   正在使用 keytool -genkeypair 生成临时签名 Keystore..."
-            echo "   ℹ️  若配置了 GH_PAT Secret，本次生成的证书将自动写入仓库"
-            echo "      Secrets，后续构建将复用同一证书，支持覆盖安装。"
-            echo "   📋  未配置 GH_PAT 时，临时证书每次重新生成，无法跨版本覆盖安装。"
 
+          elif [ -f "${KEYSTORE_PATH}" ]; then
+            # ── 方案 B：使用仓库中已提交的 Keystore 文件 ──────────────
+            # 这种情况发生在用户已通过 git 提交了证书但未配置 Secret
+            echo "✅ 使用项目内置的 Release Keystore 文件"
+            STORE_PASS="GithubManager@2024"
+            KEY_ALIAS_VAL="github-manager"
+            KEY_PASS="GithubManager@2024"
+            echo "was_generated=false" >> "$GITHUB_OUTPUT"
+
+          else
+            # ── 方案 C：全自动生成临时 Keystore ───────────────────
+            echo "⚠️  未检测到 Keystore Secret 或文件，正在自动生成临时证书..."
             STORE_PASS="GithubManager@CI"
             KEY_ALIAS_VAL="github-manager"
             KEY_PASS="GithubManager@CI"
@@ -206,8 +211,7 @@ jobs:
               -dname "CN=GitHub Manager CI, OU=Build, O=CI, L=CN, S=CN, C=CN" \
               -noprompt
 
-            echo "✅ 临时 Keystore 生成成功：${KEYSTORE_PATH}"
-
+            echo "✅ 临时 Keystore 生成成功"
             # 将 base64 写入临时文件，供后续写入 Secrets 步骤使用
             base64 -w 0 "${KEYSTORE_PATH}" > /tmp/keystore_b64.txt
             echo "was_generated=true"                 >> "$GITHUB_OUTPUT"
