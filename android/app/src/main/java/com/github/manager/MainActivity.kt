@@ -65,7 +65,7 @@ class MainActivity : AppCompatActivity() {
     private val navPathMap = linkedMapOf(
         "/repos"         to R.id.nav_repos,
         "/search"        to R.id.nav_search,
-        "/notifications" to R.id.nav_notifications,
+        "/ai-assistant"  to R.id.nav_ai,
         "/settings"      to R.id.nav_settings,
         "/"              to R.id.nav_home,
     )

@@ -73,19 +73,11 @@ jobs:
         env:
           # 版本号格式 1.0.<run_number>，与 APK versionName 保持一致
           VITE_APP_VERSION: "1.0.${{ github.run_number }}"
-          # Supabase 连接信息：优先使用仓库 Variables/Secrets，
-          # 未配置时 Vite 自动读取已提交的 .env 文件，无需额外配置即可正常构建
-          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL || '' }}
-          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY || '' }}
-        run: |
-          # 若 Secret 未配置（空值），从已提交的 .env 中取值，避免空字符串覆盖 .env
-          if [ -z "${VITE_SUPABASE_URL}" ] && [ -f ".env" ]; then
-            export VITE_SUPABASE_URL=$(grep '^VITE_SUPABASE_URL=' .env | cut -d'=' -f2-)
-          fi
-          if [ -z "${VITE_SUPABASE_ANON_KEY}" ] && [ -f ".env" ]; then
-            export VITE_SUPABASE_ANON_KEY=$(grep '^VITE_SUPABASE_ANON_KEY=' .env | cut -d'=' -f2-)
-          fi
-          pnpm exec vite build
+          # 注意：VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 不在此处注入。
+          # Vite 构建时会自动读取仓库中提交的 .env 文件。
+          # 若在此处设置（即使是空值），GitHub Actions 的 env 块会覆盖 .env 文件，
+          # 导致 Supabase URL 为空，所有 AI/Edge Function 调用失败。
+        run: pnpm exec vite build
 
       - name: 上传 Web 构建产物（供后续 Job 使用）
         uses: actions/upload-artifact@v4

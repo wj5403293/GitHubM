@@ -830,7 +830,7 @@ function HistoryPanel({
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
-      <SheetContent side="right" className="w-full max-w-sm p-0 flex flex-col bg-card">
+      <SheetContent side="right" className="w-full max-w-sm p-0 flex flex-col bg-card [&>button]:hidden">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
           <History className="w-4 h-4 text-primary" />
           <span className="text-sm font-semibold text-foreground flex-1">历史对话</span>

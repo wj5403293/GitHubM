@@ -12,14 +12,14 @@
         android:title="仓库" />
 
     <item
+        android:id="@+id/nav_ai"
+        android:icon="@drawable/ic_nav_ai"
+        android:title="AI" />
+
+    <item
         android:id="@+id/nav_search"
         android:icon="@drawable/ic_nav_search"
         android:title="搜索" />
-
-    <item
-        android:id="@+id/nav_notifications"
-        android:icon="@drawable/ic_nav_notifications"
-        android:title="通知" />
 
     <item
         android:id="@+id/nav_settings"

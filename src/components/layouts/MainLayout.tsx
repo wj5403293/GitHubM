@@ -161,7 +161,18 @@ function SidebarNav({
           <AppLogo size={28} />
         </div>
         {!collapsed && (
-          <span className="font-semibold text-sidebar-foreground text-sm tracking-tight">GitHub 管理器</span>
+          <span className="flex-1 min-w-0 font-semibold text-sidebar-foreground text-sm tracking-tight truncate">GitHub 管理器</span>
+        )}
+        {/* 移动端 Sheet 模式的关闭按钮（collapsed 桌面端不显示） */}
+        {onClose && !collapsed && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 p-1 rounded-md text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+            aria-label="关闭菜单"
+          >
+            <X className="w-4 h-4" />
+          </button>
         )}
       </div>
 
@@ -366,7 +377,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
                 <Menu className="w-5 h-5" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="p-0 w-56 bg-sidebar">
+            <SheetContent side="left" className="p-0 w-56 bg-sidebar [&>button]:hidden">
               <SidebarNav onClose={() => setMobileOpen(false)} />
             </SheetContent>
           </Sheet>
