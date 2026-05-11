@@ -38,7 +38,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.core.view.updatePadding
 import android.animation.ArgbEvaluator
 import android.animation.ValueAnimator
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -56,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var splashOverlay: View
     private lateinit var bottomNav: BottomNavigationView
+    private lateinit var navBarSpacer: View
     private var splashDismissed = false
 
     // ── 启动画面双条件门禁 ──────────────────────────────────────────
@@ -475,16 +475,18 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         splashOverlay = findViewById(R.id.splashOverlay)
         bottomNav = findViewById(R.id.bottomNav)
+        navBarSpacer = findViewById(R.id.navBarSpacer)
 
         // ── 边到边 Insets 处理 ──────────────────────────────────────
-        // 将导航栏高度作为 bottomNav 的底部 padding，防止被系统手势条/按键条遮挡。
-        // WebView 不需要顶部 padding，Web 端使用 safe-area-inset-top 自行适配。
+        // 将系统导航条高度同步给 navBarSpacer，使底部容器自然撑开，
+        // BottomNavigationView 始终保持固定 56dp，图标与文字不会因 padding 压缩而重叠。
         // Kotlin 2.0 K2 编译器对 Java SAM 推断更严格：
         //   - 用 _ 丢弃未使用的 view 参数，避免与外层作用域命名歧义
-        //   - 直接引用已初始化的 bottomNav，类型明确无歧义
-        ViewCompat.setOnApplyWindowInsetsListener(bottomNav) { _, insets ->
-            val navBarInset = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-            bottomNav.updatePadding(bottom = navBarInset.bottom)
+        ViewCompat.setOnApplyWindowInsetsListener(navBarSpacer) { _, insets ->
+            val navBarHeight = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            val lp = navBarSpacer.layoutParams
+            lp.height = navBarHeight
+            navBarSpacer.layoutParams = lp
             insets
         }
 
@@ -586,6 +588,10 @@ class MainActivity : AppCompatActivity() {
             databaseEnabled = true
             allowFileAccess = true
             allowContentAccess = true
+            // 允许 file:// 页面访问其他 file:// 资源（同目录下 CSS/JS），
+            // 解决 Vite 打包后相对路径资源在 WebView 中被跨域拦截导致的白屏问题
+            @Suppress("SetJavaScriptEnabled")
+            allowFileAccessFromFileURLs = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
             useWideViewPort = true
@@ -599,6 +605,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupWebViewClient() {
         webView.webViewClient = object : WebViewClient() {
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                android.util.Log.d("WebView", "开始加载: $url")
+            }
+
+            /**
+             * 主资源（index.html）加载失败时显示原生错误提示并尝试重新加载。
+             * 子资源（JS/CSS）失败不阻断页面，由 React 自行处理。
+             */
+            override fun onReceivedError(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?,
+            ) {
+                super.onReceivedError(view, request, error)
+                val url = request?.url?.toString() ?: ""
+                val desc = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    error?.description?.toString() ?: "未知错误"
+                } else "加载失败"
+                android.util.Log.e("WebView", "资源加载失败: $url — $desc")
+
+                // 仅主 HTML 文件失败时展示 Toast 并触发兜底 dismiss（防止卡在启动画面）
+                if (request?.isForMainFrame == true) {
+                    android.util.Log.e("WebView", "主页面加载失败，触发启动画面兜底关闭")
+                    runOnUiThread { dismissSplash() }
+                }
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView?,
                 request: WebResourceRequest?,

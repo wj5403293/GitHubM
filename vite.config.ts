@@ -16,6 +16,19 @@ export default defineConfig({
         namedExport: "ReactComponent",
       },
     }),
+    // ── 移除 crossorigin 属性（WebView file:// 白屏修复）──────────
+    // Vite 默认为 type="module" script 和 stylesheet link 添加 crossorigin，
+    // 该属性会在 file:// 协议下触发 CORS 预检，而 file:// 协议没有 Origin，
+    // 导致 WebView 静默拒绝加载脚本和样式，产生白屏。
+    // GitHub Pages 不受影响（https:// 同源，crossorigin 可有可无）。
+    {
+      name: "remove-crossorigin",
+      transformIndexHtml(html: string) {
+        return html
+          .replace(/<script\b([^>]*)\s+crossorigin\b([^>]*)>/g, "<script$1$2>")
+          .replace(/<link\b([^>]*)\s+crossorigin\b([^>]*?)>/g, "<link$1$2>");
+      },
+    },
   ],
   resolve: {
     alias: {

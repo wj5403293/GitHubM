@@ -22,22 +22,40 @@
             android:layout_height="0dp"
             android:layout_weight="1" />
 
-        <!-- 底部原生导航栏
-             wrap_content 高度：BottomNavigation 内容高度 + 底部 padding（导航条高度）自动撑开，
-             避免固定 56dp 时 updatePadding(bottom) 把图标和文字挤在一起导致重叠。 -->
-        <com.google.android.material.bottomnavigation.BottomNavigationView
-            android:id="@+id/bottomNav"
+        <!--
+          底部导航容器：BottomNavigationView 固定 56dp，不接收系统导航条 inset，
+          避免 updatePadding(bottom) 压缩内部可用高度导致图标与文字重叠。
+          系统导航条（手势条/按键条）高度由 navBarSpacer 独立承接。
+        -->
+        <LinearLayout
+            android:id="@+id/bottomNavContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="56dp"
+            android:orientation="vertical"
             android:background="@color/bottom_nav_background"
-            app:menu="@menu/bottom_nav_menu"
-            app:itemIconTint="@color/bottom_nav_colors"
-            app:itemTextColor="@color/bottom_nav_colors"
-            app:itemTextAppearanceActive="@style/BottomNavTextActive"
-            app:itemTextAppearanceInactive="@style/BottomNavTextInactive"
-            app:labelVisibilityMode="labeled"
-            app:elevation="8dp" />
+            android:elevation="8dp">
+
+            <com.google.android.material.bottomnavigation.BottomNavigationView
+                android:id="@+id/bottomNav"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:background="@android:color/transparent"
+                app:menu="@menu/bottom_nav_menu"
+                app:itemIconTint="@color/bottom_nav_colors"
+                app:itemTextColor="@color/bottom_nav_colors"
+                app:itemTextAppearanceActive="@style/BottomNavTextActive"
+                app:itemTextAppearanceInactive="@style/BottomNavTextInactive"
+                app:labelVisibilityMode="labeled"
+                app:elevation="0dp" />
+
+            <!-- 系统导航条占位符：由 WindowInsets 动态设置高度，不影响 BottomNavView 布局 -->
+            <View
+                android:id="@+id/navBarSpacer"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:background="@color/bottom_nav_background" />
+
+        </LinearLayout>
 
     </LinearLayout>
 
