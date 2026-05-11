@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      ══ 启动画面 · 深色模式配色 ══
+      极客终端风格：深黑底 + 紫色辉光
+    -->
+    <!-- 背景层 -->
+    <color name="splash_bg_solid">#08080E</color>
+    <color name="splash_glow_center">#1A0A2E</color>      <!-- 深紫光晕中心 -->
+    <color name="splash_glow_edge">#0008080E</color>      <!-- 光晕边缘：近透明深黑 -->
+    <color name="splash_top_vignette">#28060610</color>   <!-- 顶部暗角 -->
+
+    <!-- Logo（无光圈，直接展示） -->
+    <color name="splash_icon_tint">#FFFFFF</color>        <!-- Octocat：纯白，在深底上清晰 -->
+
+    <!-- 文字与装饰 -->
+    <color name="splash_corner_line">#407C4CF0</color>
+    <color name="splash_title">#F0F6FF</color>
+    <color name="splash_subtitle">#8B949E</color>
+    <color name="splash_prompt">#7C4CF0</color>
+    <color name="splash_terminal">#484F58</color>
+    <color name="splash_cursor">#7C4CF0</color>
+    <color name="splash_accent">#8B4CF8</color>
+
+    <!-- 底部导航栏颜色（深色模式覆盖） -->
+    <color name="bottom_nav_background">#0d0d11</color>   <!-- 深色侧边栏背景 -->
+    <color name="bottom_nav_selected">#8B4CF8</color>     <!-- 选中色：主题紫色 -->
+    <color name="bottom_nav_unselected">#9292A8</color>   <!-- 未选中色：muted-foreground dark -->
+    <color name="bottom_nav_divider">#21212b</color>      <!-- 分割线：dark border -->
+</resources>

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      使用 Theme.Material3（material 1.12.0 的默认主题基础）。
+      statusBarColor / navigationBarColor 已在 API 35 废弃，
+      统一由 MainActivity 通过 WindowInsetsControllerCompat 控制。
+    -->
+    <style name="Theme.GitHubManager" parent="Theme.Material3.Light.NoActionBar">
+        <!--
+          冷启动窗口背景：与浅色模式背景色一致，避免白屏闪烁。
+          MainActivity 在 onCreate 中根据系统主题动态切换。
+        -->
+        <item name="android:windowBackground">@color/splash_bg_solid</item>
+        <!-- API 28+ 刘海屏延伸；低版本自动忽略 -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <!-- Material3 主题色 -->
+        <item name="colorPrimary">#7c3aed</item>
+        <item name="colorPrimaryVariant">#6d28d9</item>
+        <item name="colorOnPrimary">#ffffff</item>
+    </style>
+
+    <!-- 底部导航栏选中文字样式 -->
+    <style name="BottomNavTextActive">
+        <item name="android:textSize">10sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <!-- 底部导航栏未选中文字样式 -->
+    <style name="BottomNavTextInactive">
+        <item name="android:textSize">10sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+</resources>
