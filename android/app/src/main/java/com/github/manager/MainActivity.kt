@@ -152,7 +152,33 @@ class MainActivity : AppCompatActivity() {
     // ── 下载完成广播 ────────────────────────────────────────────────
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            Toast.makeText(context, "✓ 文件已下载完成，保存至「下载」文件夹", Toast.LENGTH_SHORT).show()
+            val ctx = context ?: return
+            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: return
+            if (id == -1L) return
+
+            val dm = ctx.getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
+            val cursor = dm.query(DownloadManager.Query().setFilterById(id))
+            cursor?.use { c ->
+                if (!c.moveToFirst()) return
+                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                    Toast.makeText(ctx, "✓ 文件已下载完成，保存至「下载」文件夹", Toast.LENGTH_SHORT).show()
+                } else {
+                    val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                    val msg = when (reason) {
+                        DownloadManager.ERROR_INSUFFICIENT_SPACE      -> "存储空间不足"
+                        DownloadManager.ERROR_HTTP_DATA_ERROR          -> "数据传输错误"
+                        DownloadManager.ERROR_UNHANDLED_HTTP_CODE      -> "服务器返回错误"
+                        DownloadManager.ERROR_CANNOT_RESUME            -> "无法续传，请重试"
+                        DownloadManager.ERROR_FILE_ALREADY_EXISTS      -> "文件已存在"
+                        DownloadManager.ERROR_TOO_MANY_REDIRECTS       -> "重定向次数过多"
+                        403                                            -> "权限不足（403），请检查 Token"
+                        404                                            -> "资源不存在（404）"
+                        else -> "下载失败（错误码 $reason）"
+                    }
+                    Toast.makeText(ctx, "❌ $msg", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -1003,42 +1029,58 @@ class MainActivity : AppCompatActivity() {
 
         // lifecycleScope 绑定 Activity 生命周期，Activity 销毁时自动取消
         lifecycleScope.launch {
-            // getOrNull() 返回 Pair<String,String>? 可空类型，先赋值再按需访问
+            // 返回 Pair<finalUrl, finalToken>，null 表示彻底失败
             val result: Pair<String, String>? = withContext(Dispatchers.IO) {
                 runCatching {
-                    val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                        if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
-                        setRequestProperty("User-Agent", "GitHub Manager Android")
-                        // ⚠️ 不设置 Accept 头：
-                        //   GitHub API 端点（api.github.com）仅接受 application/vnd.github+json，
-                        //   发送 application/octet-stream 会触发 415 Unsupported Media Type。
-                        //   此步骤只需要拿到 Location 头完成重定向解析，无需指定内容类型。
-                        instanceFollowRedirects = false // 手动处理重定向，避免 auth 头泄露给 S3
-                        requestMethod = "GET"
-                        connectTimeout = 15_000
-                        readTimeout = 5_000
-                    }
-                    conn.connect()
-                    val code = conn.responseCode
-                    val location = conn.getHeaderField("Location")
-                    conn.disconnect()
+                    var currentUrl = url
+                    var currentToken = token
+                    var hops = 0
+                    val maxHops = 5   // 防止重定向死循环
 
-                    when {
-                        code in 300..399 && !location.isNullOrBlank() ->
-                            // GitHub → 重定向到预签名 URL，不携带 auth（预签名 URL 已含鉴权参数）
-                            Pair(location, "")
-                        code == 200 ->
-                            // 直链，无重定向，携带 auth
-                            Pair(url, token)
-                        else -> null // 非预期状态码，通知用户
+                    while (hops < maxHops) {
+                        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                            if (currentToken.isNotBlank()) {
+                                setRequestProperty("Authorization", "Bearer $currentToken")
+                            }
+                            setRequestProperty("User-Agent", "GitHub Manager Android")
+                            instanceFollowRedirects = false // 手动跟随重定向，防止 auth 头泄露给 S3/CDN
+                            requestMethod = "GET"
+                            connectTimeout = 20_000  // 增大：国内访问 GitHub 延迟较高
+                            readTimeout = 20_000     // 增大：等待响应头超时
+                        }
+                        conn.connect()
+                        val code = conn.responseCode
+                        val location = conn.getHeaderField("Location")
+                        conn.disconnect()
+
+                        when {
+                            code in 301..308 && !location.isNullOrBlank() -> {
+                                // 跟随重定向：一旦离开 api.github.com，清空 token
+                                // 防止 Bearer token 被转发给 S3/CDN 预签名 URL 造成签名冲突
+                                val isGitHubApi = location.startsWith("https://api.github.com")
+                                currentToken = if (isGitHubApi) currentToken else ""
+                                currentUrl = location
+                                hops++
+                            }
+                            code == 200 -> {
+                                // 无重定向直链，保留原 token（raw.githubusercontent.com 等）
+                                return@runCatching Pair(currentUrl, currentToken)
+                            }
+                            else -> {
+                                // 非预期状态码（401/403/404 等），返回 null 进入降级分支
+                                return@runCatching null
+                            }
+                        }
                     }
+                    // 超过最大跳数，返回当前解析到的最终 URL（不带 token，已是预签名 URL）
+                    Pair(currentUrl, currentToken)
                 }.getOrNull() // 网络异常时 getOrNull() 返回 null，走降级分支
             }
 
-            // 回到主线程更新 UI / 提交 DownloadManager（已在 lifecycleScope 的主线程上下文）
             if (result == null) {
-                // 非预期状态码：降级用原始 URL 直接提交，DownloadManager 自行处理
-                enqueueDownload(url, fileName, token)
+                // 解析失败：降级直接提交 DownloadManager，不带 token
+                // （对公开仓库有效；私有仓库需依赖 resolveAndDownload 成功路径）
+                enqueueDownload(url, fileName, "")
             } else {
                 enqueueDownload(result.first, fileName, result.second)
             }
@@ -1047,21 +1089,26 @@ class MainActivity : AppCompatActivity() {
 
     /** 将最终 URL 提交给 DownloadManager，token 为空时不发送 Authorization header */
     private fun enqueueDownload(url: String, fileName: String, token: String) {
+        // 安全化文件名：移除路径分隔符及非法字符，防止 setDestinationInExternalPublicDir 抛异常
+        val safeFileName = fileName
+            .replace(Regex("[/\\\\:*?\"<>|]"), "_")  // Windows/Unix 非法字符
+            .trim()
+            .takeIf { it.isNotBlank() } ?: "download_${System.currentTimeMillis()}"
+
         runCatching {
             val request = DownloadManager.Request(Uri.parse(url)).apply {
                 if (token.isNotBlank()) {
                     addRequestHeader("Authorization", "Bearer $token")
                 }
                 addRequestHeader("User-Agent", "GitHub Manager Android")
-                // 不设置 Accept 头：S3/CDN 预签名 URL 不需要，设置反而可能引发问题
-                setTitle(fileName)
-                setDescription("正在从 GitHub 下载：$fileName")
+                setTitle(safeFileName)
+                setDescription("正在从 GitHub 下载：$safeFileName")
                 setNotificationVisibility(
                     DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
                 )
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeFileName)
                 setAllowedOverMetered(true)
-                setAllowedOverRoaming(false)
+                setAllowedOverRoaming(true) // 允许漫游网络下载（流量用户不应被拒绝）
             }
             val dm = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
             dm.enqueue(request)
