@@ -783,9 +783,12 @@ async function callLLM(
 ): Promise<string> {
   const { url, headers, bodyExtra } = buildLLMRequest(cfg, platformKey);
   console.log(`[callLLM] type=${cfg.type} model=${cfg.model || "default"} url=${url}`);
-  // LLM API 独立超时 180 秒，防止 fetch 无限挂起
+
+  // ── LLM fetch 超时：90s 防止 TCP 连接永久挂起 ─────────────────────────────
+  // Edge Function 自身有 ~240s 超时，此处设 90s 确保在 Edge 超时前得到错误反馈
   const llmAbort = new AbortController();
-  const llmTimer = setTimeout(() => llmAbort.abort(), 180_000);
+  const llmTimer = setTimeout(() => llmAbort.abort("llm-timeout"), 90_000);
+
   let res: Response;
   try {
     res = await fetch(url, {
@@ -794,20 +797,50 @@ async function callLLM(
       body: JSON.stringify({ messages, ...bodyExtra }),
       signal: llmAbort.signal,
     });
-  } finally {
+  } catch (e) {
     clearTimeout(llmTimer);
+    const err = e as Error;
+    if (err?.name === "AbortError") {
+      throw new Error("LLM 请求超时（90s）：模型服务响应过慢，请稍后重试");
+    }
+    throw new Error(`LLM 网络请求失败：${err.message}`);
   }
+  clearTimeout(llmTimer);
+
   if (!res.ok || !res.body) {
-    const errText = await res.text();
-    console.error(`[callLLM] 失败 status=${res.status} body=${errText.slice(0, 300)}`);
-    // 截断过长错误信息，防止 Error message 过大（如 429 限流页面返回 HTML）
-    const shortErr = errText.length > 500 ? errText.slice(0, 500) + "…" : errText;
-    throw new Error(`LLM 调用失败: HTTP ${res.status} ${shortErr}`);
+    // ── 清洁化 HTTP 错误：避免将完整 HTML 页面写入 Error.message ──────────────
+    let errText = "";
+    try { errText = await res.text(); } catch { /* ignore */ }
+
+    // 优先提取 JSON error 字段
+    let errMsg = "";
+    try {
+      const parsed = JSON.parse(errText);
+      errMsg = parsed?.error?.message || parsed?.error || parsed?.message || "";
+    } catch { /* not JSON */ }
+
+    if (!errMsg) {
+      // HTML 页面：提取 <title> 或截取纯文本
+      if (errText.trim().startsWith("<") || errText.includes("<!DOCTYPE")) {
+        const titleMatch = errText.match(/<title[^>]*>([^<]{1,120})<\/title>/i);
+        errMsg = titleMatch?.[1]?.trim() || "服务端返回 HTML 页面（可能为限流/防火墙拦截）";
+      } else {
+        // 纯文本：截断到 400 字符，避免超大错误对象
+        errMsg = errText.replace(/\s+/g, " ").trim().slice(0, 400) || res.statusText;
+      }
+    }
+
+    // 附带 HTTP 状态码，便于区分 401/403/429/5xx
+    const fullMsg = `LLM 调用失败（HTTP ${res.status}）：${errMsg}`;
+    console.error(`[callLLM] 失败 status=${res.status} msg=${errMsg.slice(0, 200)}`);
+    throw new Error(fullMsg);
   }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let full = "", buf = "";
+  let hadReasoningContent = false; // 标记是否收到过 reasoning_content（思考过程）
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -823,8 +856,9 @@ async function callLLM(
         if (!delta) continue;
 
         // ── 思考过程 (DeepSeek Reasoner) ──
-        if (delta.reasoning_content && onThinkingChunk) {
-          await onThinkingChunk(delta.reasoning_content);
+        if (delta.reasoning_content) {
+          hadReasoningContent = true;
+          if (onThinkingChunk) await onThinkingChunk(delta.reasoning_content);
         } else if (onHeartbeat) {
           // 非思考内容时，每次收到 chunk 就发心跳，防止 SSE 连接超时
           await onHeartbeat();
@@ -835,9 +869,21 @@ async function callLLM(
       } catch { /* 跳过非 JSON 行 */ }
     }
   }
+
+  // ── 空响应检测：仅有 reasoning_content 但 content 始终为空 ──────────────────
+  // 部分免费模型（如文心 ERNIE 限流时）只输出思考过程，正式 content 字段为空。
+  // 若直接返回空字符串，下游 JSON 解析会将其当作"无工具调用"并触发错误流程。
+  if (full.trim() === "") {
+    if (hadReasoningContent) {
+      console.error("[callLLM] 模型只返回了 reasoning_content，content 字段为空（可能限流或配额耗尽）");
+      throw new Error("模型只返回了思考过程（reasoning_content），正式回答为空。可能触发了限流或配额耗尽，请稍后重试");
+    }
+    // 无任何内容：也抛出错误，避免下游静默失败
+    console.error("[callLLM] 模型返回了空响应（full.length=0）");
+    throw new Error("模型返回了空响应，可能是上下文过长或服务异常，请重试");
+  }
+
   console.log(`[callLLM] 完成 full.length=${full.length}`);
-  // 防止 LLM 只输出思考过程而无正式内容（常见于免费模型限流或异常）
-  if (!full) throw new Error("LLM 返回空内容，可能被限流或模型异常");
   return full;
 }
 
@@ -1206,34 +1252,46 @@ Deno.serve(async (req: Request): Promise<Response> => {
         await sendTyped({ type: "think_chunk", content: chunk });
       };
 
-      // ── LLM 调用重试（最多 3 次，指数退避 2s/4s/6s）────────────────────────
-      let llmRetry = 0;
-      const MAX_LLM_RETRIES = 3;
-      while (true) {
-        try {
-          assistantText = await callLLM(modelConfig, platformKey, fullMessages, onThinkingChunk, heartbeat);
-          if (thinkingStarted) await sendTyped({ type: "think_end" });
-          break; // 成功
-        } catch (e) {
-          const errMsg = (e as Error).message;
-          const isAuthErr = /401|403|unauthorized|forbidden/i.test(errMsg);
-          if (isAuthErr) {
-            await sendChunk(`\n🔒 认证失败：${errMsg.slice(0, 150)}`);
-            batchDone = true;
-            break;
-          }
-          llmRetry++;
-          if (llmRetry < MAX_LLM_RETRIES) {
-            await sendChunk(`\n⚠️ AI 调用失败（${errMsg.slice(0, 100)}），${llmRetry}/${MAX_LLM_RETRIES} 次重试...`);
-            await new Promise(res => setTimeout(res, llmRetry * 2000));
-            continue;
-          }
-          await sendChunk(`\n❌ AI 调用失败（已重试 ${MAX_LLM_RETRIES} 次）：${errMsg}`);
+      try {
+        assistantText = await callLLM(modelConfig, platformKey, fullMessages, onThinkingChunk, heartbeat);
+        if (thinkingStarted) await sendTyped({ type: "think_end" });
+      } catch (e) {
+        const errMsg = (e as Error).message ?? String(e);
+        // ── 错误分类：永久性错误立即终止；瞬时错误指数退避重试 ──────────────────
+        // 永久性：401/403 API Key 问题，重试无意义
+        const isPermanent =
+          errMsg.includes("HTTP 401") || errMsg.includes("HTTP 403") ||
+          errMsg.includes("401）") || errMsg.includes("403）") ||
+          errMsg.includes("认证失败") || errMsg.includes("无权限");
+        // 瞬时性：429 限流 / 5xx 服务异常 / 超时 / 网络抖动
+        const isTransient =
+          errMsg.includes("HTTP 429") || errMsg.includes("429）") ||
+          errMsg.includes("限流") || errMsg.includes("超时") ||
+          errMsg.includes("LLM 网络") || errMsg.includes("5") && /HTTP 5\d\d/.test(errMsg);
+
+        if (isPermanent) {
+          // 永久错误：直接输出到流并终止整个任务，不重试
+          console.error(`[batch ${batch}] 永久错误，终止任务：${errMsg}`);
+          await sendChunk(`\n❌ AI 调用失败（配置错误）：${errMsg}`);
           batchDone = true;
           break;
         }
+
+        if (isTransient && round < MAX_ROUNDS_PER_BATCH - 1) {
+          // 瞬时错误：最多退避重试 2 次（通过 round 计数控制），每次等待 3s
+          const retryDelay = 3000;
+          console.warn(`[batch ${batch} round ${round}] 瞬时错误，${retryDelay}ms 后重试：${errMsg}`);
+          await sendChunk(`\n⚠️ AI 调用遇到临时错误（${errMsg.slice(0, 80)}），${retryDelay / 1000}s 后自动重试...`);
+          await new Promise(r => setTimeout(r, retryDelay));
+          continue; // 重试本轮，不 break
+        }
+
+        // 其他未知错误 / 重试次数用尽
+        console.error(`[batch ${batch} round ${round}] 错误终止：${errMsg}`);
+        await sendChunk(`\n❌ AI 调用失败：${errMsg}`);
+        batchDone = true;
+        break;
       }
-      if (llmRetry >= MAX_LLM_RETRIES) break; // 所有重试都失败
 
       // ── 预处理：统一剥除 markdown 代码围栏 ────────────────────────────────────
       // LLM 有时会用 ```json ... ``` 包裹 PLAN/工具 JSON，导致所有正则失效
