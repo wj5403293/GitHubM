@@ -768,7 +768,22 @@ ${branchNote}
   1. 先输出 PLAN（首轮）
   2. 逐步执行每个步骤，切换步骤时输出 STEP:id
   3. 每步完成后检查结果，决定下一步
-  4. 全部完成后输出简洁的完成总结`;
+  4. 全部完成后输出简洁的完成总结
+
+==============================
+回复语气与格式规范（自然对话）
+==============================
+- **语气**：像一位熟悉 GitHub 的开发者朋友，用自然、简洁的中文对话，避免生硬的机器腔
+- **最终总结格式**：
+  - 用 1-3 句话直接说明做了什么、结果如何，不用铺垫废话
+  - 如有文件/分支/PR 操作，用简洁的项目符号列出，不要展开技术细节
+  - 不需要每句话都加 ✅❌⚠️ 等 emoji，偶尔点缀即可
+  - 不使用 ## 二级标题 / ### 三级标题；层次感用换行和项目符号体现
+  - 避免"我已经成功地完成了您交给我的任务"这类冗长总结句
+  - 错误时直接说明原因和建议，不用"很遗憾地告知您"
+- **代码/命令**：必要时用行内代码或代码块，但不要每个文件名都加反引号包裹
+- **举例**：好的回复是"已把 \`deploy.yml\` 的 Node 版本从 16 改到 20，构建触发后大约 2 分钟出结果。"而不是"我已成功执行了更新操作，✅ 步骤1：分析工作流文件 ✅ 步骤2：修改版本号..."`;
+
 }
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
@@ -1152,6 +1167,91 @@ function createSSEStream() {
   return { readable, sendTyped, sendChunk, sendDone };
 }
 
+/**
+ * 逐词流式推送最终回答，模拟打字机效果。
+ * 将文本按"词+空白"分组，每 ~20ms 推送一组，
+ * 代码块（```...```）整体一次性推送避免渲染撕裂。
+ */
+async function streamAnswer(
+  text: string,
+  sendChunk: (s: string) => Promise<void>,
+  delayMs = 20,
+) {
+  if (!text) return;
+
+  // 先检测是否有代码块——若全文只是一段代码，直接一次性输出
+  if (text.startsWith("```") && text.trimEnd().endsWith("```")) {
+    await sendChunk(text);
+    return;
+  }
+
+  // 按行切分；代码块整体输出，普通行逐词输出
+  const lines = text.split("\n");
+  let inCodeBlock = false;
+  let codeBuffer = "";
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    const suffix = li < lines.length - 1 ? "\n" : "";
+
+    if (line.startsWith("```")) {
+      if (!inCodeBlock) {
+        // 进入代码块
+        inCodeBlock = true;
+        codeBuffer = line + "\n";
+      } else {
+        // 退出代码块：整体一次性推送
+        inCodeBlock = false;
+        codeBuffer += line + suffix;
+        await sendChunk(codeBuffer);
+        codeBuffer = "";
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeBuffer += line + "\n";
+      continue;
+    }
+
+    // 普通行：按空格 + 中文字符粒度切分（中文无空格，逐字推送）
+    // 策略：英文按词（连续非空白），中文每 2~4 字为一组
+    const segments: string[] = [];
+    let buf = "";
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      const isCJK = ch >= "\u4e00" && ch <= "\u9fff";
+      if (isCJK) {
+        if (buf) { segments.push(buf); buf = ""; }
+        buf += ch;
+        // 每 3 个中文字符为一组
+        if (buf.length >= 3) { segments.push(buf); buf = ""; }
+      } else if (ch === " " || ch === "\t") {
+        buf += ch;
+        segments.push(buf);
+        buf = "";
+      } else {
+        buf += ch;
+      }
+    }
+    if (buf) segments.push(buf);
+
+    // 逐段推送，每段间隔 delayMs
+    for (let si = 0; si < segments.length; si++) {
+      const isLast = li === lines.length - 1 && si === segments.length - 1;
+      await sendChunk(segments[si] + (isLast && suffix === "" ? "" : ""));
+      if (si < segments.length - 1 || suffix) {
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+    // 行末换行符
+    if (suffix) await sendChunk(suffix);
+  }
+
+  // 未闭合的代码块（异常情况）直接输出
+  if (codeBuffer) await sendChunk(codeBuffer);
+}
+
 // ── 主入口 ───────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -1272,7 +1372,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         if (isPermanent) {
           // 永久错误：直接输出到流并终止整个任务，不重试
           console.error(`[batch ${batch}] 永久错误，终止任务：${errMsg}`);
-          await sendChunk(`\n❌ AI 调用失败（配置错误）：${errMsg}`);
+          await streamAnswer(`❌ AI 调用失败（配置错误）：${errMsg}`, sendChunk);
           batchDone = true;
           break;
         }
@@ -1281,14 +1381,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
           // 瞬时错误：最多退避重试 2 次（通过 round 计数控制），每次等待 3s
           const retryDelay = 3000;
           console.warn(`[batch ${batch} round ${round}] 瞬时错误，${retryDelay}ms 后重试：${errMsg}`);
-          await sendChunk(`\n⚠️ AI 调用遇到临时错误（${errMsg.slice(0, 80)}），${retryDelay / 1000}s 后自动重试...`);
+          // 用 status_warning 事件通知前端（toast），而非写入对话气泡
+          await sendTyped({ type: "status_warning", message: `遇到临时错误，${retryDelay / 1000}s 后自动重试…` });
           await new Promise(r => setTimeout(r, retryDelay));
           continue; // 重试本轮，不 break
         }
 
         // 其他未知错误 / 重试次数用尽
         console.error(`[batch ${batch} round ${round}] 错误终止：${errMsg}`);
-        await sendChunk(`\n❌ AI 调用失败：${errMsg}`);
+        await streamAnswer(`❌ AI 调用失败：${errMsg}`, sendChunk);
         batchDone = true;
         break;
       }
@@ -1367,7 +1468,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }
         // 持久化工作流完成
         if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
-        await sendChunk(assistantText);
+        // 逐词流式输出最终回答，模拟打字机效果
+        await streamAnswer(assistantText, sendChunk);
         batchDone = true; // 任务已完成，退出外层批次循环
         break;
       }
@@ -1472,7 +1574,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             await dbFinishWorkflow(sb, workflowDbId);
           }
           currentStepId = null;
-          await sendChunk("\n\n⚠️ 步骤执行失败（已重试 2 次），终止任务。");
+          await streamAnswer("⚠️ 步骤执行失败（已重试 2 次），终止任务。", sendChunk);
           batchDone = true;
           break;
         }
@@ -1489,9 +1591,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (round === MAX_ROUNDS_PER_BATCH - 1) {
         const hasMoreBatches = batch < MAX_BATCHES - 1;
         if (hasMoreBatches) {
-          // 任务仍在进行：发通知后注入续跑指令，进入下一批
+          // 任务仍在进行：用 status_info 事件通知前端（toast），不写入对话气泡
           console.log(`[auto-continue] batch=${batch} totalRound=${totalRound} 自动续跑`);
-          await sendChunk(`\n\n⏩ 已完成第 ${batch + 1} 批次（${totalRound + 1} 轮），任务继续执行...\n\n`);
+          await sendTyped({ type: "status_info", message: `第 ${batch + 1} 批任务完成，继续执行剩余步骤…` });
           // 注入系统提示：告知 AI 继续剩余步骤，不要重新规划
           fullMessages.push({
             role: "user",
@@ -1510,7 +1612,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
             }
           }
           if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
-          await sendChunk(`\n\n⚠️ 已达到最大工具调用轮次（${totalRound + 1} 轮），任务可能未完全完成，请重新发送指令继续。`);
+          await streamAnswer(`⚠️ 已达到最大工具调用轮次（${totalRound + 1} 轮），任务可能未完全完成，请重新发送指令继续。`, sendChunk);
           batchDone = true;
         }
       }
@@ -1527,7 +1629,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       console.error("[IIFE fatal]", (fatalErr as Error).message);
       // @ts-ignore: heartbeatTimer is defined in outer scope
       if (typeof heartbeatTimer !== 'undefined') clearInterval(heartbeatTimer);
-      try { await sendChunk(`\n\n❌ 内部错误：${(fatalErr as Error).message}`); } catch { /* ignore */ }
+      try { await streamAnswer(`❌ 内部错误：${(fatalErr as Error).message}`, sendChunk); } catch { /* ignore */ }
       try { await sendDone(); } catch { /* ignore */ }
     }
   })();
