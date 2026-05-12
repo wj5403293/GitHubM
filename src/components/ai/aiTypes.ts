@@ -27,6 +27,26 @@ export interface ChatSessionMessage {
 
 // ── 消息类型 ────────────────────────────────────────────────────────────────────
 
+/** 内联工具调用条目（在气泡内展示） */
+export interface InlineTool {
+  id: string;
+  tool: string;
+  label: string;
+  hint: string;
+  status: 'running' | 'success' | 'fail';
+  elapsedMs?: number;
+  result?: string;
+}
+
+/** 内联任务计划步骤（在气泡内展示） */
+export interface InlineStep {
+  id: string;
+  title: string;
+  desc: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  retryCount?: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -37,6 +57,10 @@ export interface Message {
   thinkingContent?: string;
   /** 思考是否完成 */
   thinkingDone?: boolean;
+  /** 内联任务步骤（气泡内展示，移动端可见） */
+  inlinePlan?: InlineStep[];
+  /** 内联工具调用列表（气泡内展示，移动端可见） */
+  inlineTools?: InlineTool[];
 }// ── 工具调用记录类型 ────────────────────────────────────────────────────────────
 
 export interface ToolHistoryItem {
