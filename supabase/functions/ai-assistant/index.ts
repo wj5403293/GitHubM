@@ -661,9 +661,12 @@ ${branchNote}
    STEP:1
    {"tool":"file_tree","path":"","depth":"3"}
 
-3. **ReAct 模式**：每轮只调用一个工具，工具 JSON 单独成行，无 markdown 包裹。
+3. **ReAct 模式**：每轮只调用一个工具，工具 JSON 单独成行，**绝对不加 markdown 代码围栏（反引号）**。
 4. **禁止伪造**：不要用文字模仿工具执行过程，只输出 JSON。
 5. **自主执行**：禁止询问用户是否继续，禁止提前结束，工具报错时自行修正后继续。
+6. **格式强制**：工具调用 JSON 中的每个键值必须是字符串，不允许嵌套对象作为值（除 inputs 字段外）。正确示例：
+   {"tool":"patch_file","path":"src/a.ts","start_line":"10","end_line":"12","content":"新内容","message":"fix: xxx","branch":"main"}
+   错误示例（值嵌套对象）：{"tool":"patch_file","range":{"start":10}}
 
 ==============================
 工具清单（每次只调用一个，JSON 单独成行）
@@ -825,30 +828,107 @@ async function callLLM(
   return full;
 }
 
-function extractToolCall(text: string): Record<string, string> | null {
-  const match = text.match(/\{[^{}]*"tool"\s*:\s*"[^"]+[^{}]*\}/);
-  if (!match) return null;
-  try { return JSON.parse(match[0]); } catch { return null; }
+// ── 解析辅助工具 ──────────────────────────────────────────────────────────────
+
+/**
+ * 去除 LLM 输出中的 markdown 代码围栏（```json ... ``` 等），
+ * 避免正则/JSON.parse 因反引号而失败。
+ */
+function stripCodeFences(text: string): string {
+  return text
+    .replace(/^```[a-zA-Z]*\s*\n?/gm, "")
+    .replace(/^```\s*$/gm, "")
+    .trim();
 }
 
-/** 从文本中提取任务计划（首轮 PLAN:{...} 行） */
+/**
+ * 在文本中用括号匹配法提取第一个完整 JSON 对象字符串。
+ * 支持嵌套 `{}` 和内容中包含花括号的字符串值，
+ * 避免 `[^{}]*` 正则因 patch_file.content 等多行字段而失败。
+ */
+function extractFirstJsonObject(text: string): string | null {
+  let depth = 0, start = -1;
+  let inString = false, escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start !== -1) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * 健壮提取工具调用 JSON。
+ * 策略（优先级从高到低）：
+ *   1. 逐行扫描：找以 `{` 开头且含 `"tool"` 的行，尝试 JSON.parse
+ *   2. 括号匹配：在完整文本中遍历所有顶层 `{}` 块，找含 `"tool"` 的可解析对象
+ * 在每种策略前均先剥除 markdown 代码围栏。
+ */
+function extractToolCall(text: string): Record<string, string> | null {
+  const clean = stripCodeFences(text);
+
+  // 策略 1：逐行扫描（最常见情况：工具 JSON 单独成行）
+  for (const line of clean.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{") || !trimmed.includes('"tool"')) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed.tool === "string") return parsed as Record<string, string>;
+    } catch { /* 继续下一行 */ }
+  }
+
+  // 策略 2：括号匹配法（工具 JSON 跨行或与其他文字混在一起时）
+  let searchFrom = 0;
+  while (searchFrom < clean.length) {
+    const idx = clean.indexOf("{", searchFrom);
+    if (idx === -1) break;
+    const candidate = extractFirstJsonObject(clean.slice(idx));
+    if (!candidate) break;
+    if (candidate.includes('"tool"')) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (typeof parsed.tool === "string") return parsed as Record<string, string>;
+      } catch { /* 继续搜索 */ }
+    }
+    searchFrom = idx + 1;
+  }
+  return null;
+}
+
+/** 从文本中提取任务计划（首轮 PLAN:{...} 行）。
+ *  支持 `PLAN :` / `PLAN:` 以及 markdown 围栏包裹，
+ *  用括号匹配法提取完整 JSON 避免正则截断。 */
 interface PlanStep { id: string; title: string; desc: string; }
 function extractPlan(text: string): PlanStep[] | null {
-  const m = text.match(/PLAN:(\{[^}]*"steps"[^}]*\}|\{.*?\})/s);
-  if (!m) return null;
+  const clean = stripCodeFences(text);
+  // 找 PLAN: 的位置（允许冒号前后有空格）
+  const planIdx = clean.search(/\bPLAN\s*:/i);
+  if (planIdx === -1) return null;
+  // 截取 PLAN: 之后的文本，找第一个完整 JSON 对象
+  const afterPlan = clean.slice(planIdx).replace(/^PLAN\s*:\s*/i, "");
+  const jsonStr = extractFirstJsonObject(afterPlan);
+  if (!jsonStr) return null;
   try {
-    // 提取 PLAN: 后面的完整 JSON（可能跨行，用贪婪匹配 steps 数组）
-    const jsonMatch = text.match(/PLAN:(\{"steps"\s*:\s*\[.*?\]\s*\})/s);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[1]);
-    if (Array.isArray(parsed.steps)) return parsed.steps as PlanStep[];
+    const parsed = JSON.parse(jsonStr);
+    if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
+      return parsed.steps as PlanStep[];
+    }
   } catch { /* ignore */ }
   return null;
 }
 
-/** 从文本中提取步骤标记 STEP:id */
+/** 从文本中提取步骤标记 STEP:id（不区分大小写，允许冒号前后有空格）。 */
 function extractStepMarker(text: string): string | null {
-  const m = text.match(/\bSTEP\s*:\s*([a-zA-Z0-9_-]+)/);
+  const m = text.match(/\bSTEP\s*:\s*([a-zA-Z0-9_-]+)/i);
   return m ? m[1] : null;
 }
 
@@ -1063,6 +1143,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     
     // 心跳辅助函数：每次调用都向 SSE 写入一条 heartbeat，保持连接活跃
     const heartbeat = () => sendTyped({ type: "heartbeat" });
+    // 启动背景心跳，每 15 秒发送一次，防止工具调用等耗时操作导致连接中断
+    const heartbeatTimer = setInterval(heartbeat, 15000);
 
     // Supabase 客户端（可能为 null，持久化失败不影响主流程）
     const sb = makeSupabase();
@@ -1088,6 +1170,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const MAX_ROUNDS = 15;
     // 当前正在执行的计划步骤 ID
     let currentStepId: string | null = null;
+    // 连续"无工具调用"的 nudge 计数（最多纠正 2 次，防止死循环）
+    let nudgeCount = 0;
+    const MAX_NUDGE = 2;
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
       let assistantText = "";
@@ -1110,9 +1195,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
         break;
       }
 
+      // ── 预处理：统一剥除 markdown 代码围栏 ────────────────────────────────────
+      // LLM 有时会用 ```json ... ``` 包裹 PLAN/工具 JSON，导致所有正则失效
+      const rawText = assistantText;
+      assistantText = stripCodeFences(assistantText);
+
       // ── 首轮提取任务计划 ─────────────────────────────────────────────────────
       if (round === 0) {
-        const plan = extractPlan(assistantText);
+        const plan = extractPlan(rawText); // 使用原始文本（stripCodeFences 在内部处理）
         if (plan && plan.length > 0) {
           await sendTyped({ type: "plan", steps: plan });
           // 持久化：创建工作流 + 步骤
@@ -1120,9 +1210,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
             const firstMsg = messages[messages.length - 1]?.content ?? "";
             workflowDbId = await dbCreateWorkflow(sb, userId, `${owner}/${repo}`, firstMsg, plan);
           }
-          // 从显示文本中移除 PLAN:{...} 行
-          assistantText = assistantText.replace(/PLAN\s*:\s*\{"steps"\s*:\s*\[.*?\]\s*\}\n?/s, "").trim();
         }
+        // 从显示文本中移除 PLAN:{...} 块（宽松匹配，支持多行 JSON）
+        assistantText = assistantText.replace(/\bPLAN\s*:\s*\{[\s\S]*?\}\s*/i, "").trim();
       }
 
       // ── 每轮提取步骤标记 ─────────────────────────────────────────────────────
@@ -1144,13 +1234,30 @@ Deno.serve(async (req: Request): Promise<Response> => {
             status: "running", started_at: new Date().toISOString(),
           });
         }
-        // 移除 STEP:N 标记行
-        assistantText = assistantText.replace(/STEP\s*:\s*\S+[ \t]*\n?/, "").trim();
       }
+      // 移除 STEP:N 标记行（在提取工具调用前清除，避免干扰解析）
+      assistantText = assistantText.replace(/\bSTEP\s*:\s*\S+[ \t]*\n?/i, "").trim();
 
       const toolCall = extractToolCall(assistantText);
       if (!toolCall) {
-        // 最终回答 → 结束当前步骤（如有）
+        // ── Nudge 机制：任务进行中但 LLM 忘记输出工具 JSON ─────────────────────
+        // 判断条件：有步骤在执行（或 round=0 时刚给了 PLAN），且 nudge 未超限
+        const taskOngoing = currentStepId !== null || round === 0;
+        if (taskOngoing && nudgeCount < MAX_NUDGE) {
+          nudgeCount++;
+          console.log(`[nudge ${nudgeCount}] round=${round} 无工具调用，注入纠正提示`);
+          // 保留 LLM 已输出的文字内容，再追加纠正指令
+          const displayText = assistantText.replace(/\bPLAN\s*:\s*\{[\s\S]*?\}/i, "").trim();
+          if (displayText) await sendChunk(displayText + "\n");
+          fullMessages.push({ role: "assistant", content: rawText });
+          fullMessages.push({
+            role: "user",
+            content: "⚠️ 系统提示：你刚才没有输出工具调用 JSON。请直接输出下一个工具的 JSON，不要有任何 markdown 围栏或额外解释，格式示例：\n{\"tool\":\"list_files\",\"path\":\"\"}\n请继续执行任务。",
+          });
+          continue; // 重新进入循环，让 LLM 补发工具 JSON
+        }
+
+        // ── 真正的最终回答：结束当前步骤 ────────────────────────────────────
         if (currentStepId) {
           await sendTyped({ type: "step_end", stepId: currentStepId, status: "done" });
           if (sb && workflowDbId) {
@@ -1166,9 +1273,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
         break;
       }
 
-      // 工具调用前的前置文本（去除 PLAN/STEP 标记后的剩余内容）
-      const before = assistantText.split(/\{[^{}]*"tool"[^{}]*\}/)[0].trim();
-      if (before) await sendChunk(before + "\n\n");
+      // 成功解析到工具调用，重置 nudge 计数
+      nudgeCount = 0;
+
+      // 工具调用前的前置文本：取工具 JSON 出现之前的内容
+      // 用 indexOf 找到工具 JSON 在文本中的起始位置，避免正则 split 的局限
+      const _toolJsonStr = JSON.stringify(toolCall); // 规范化后的 JSON（调试用）
+      // 找到工具 JSON 在 assistantText 中的大概位置（通过 "tool" 键名定位）
+      const toolKeyIdx = assistantText.indexOf('"tool"');
+      // 向前找最近的 `{`
+      const braceIdx = toolKeyIdx !== -1 ? assistantText.lastIndexOf("{", toolKeyIdx) : -1;
+      const beforeText = braceIdx > 0 ? assistantText.slice(0, braceIdx).trim() : "";
+      if (beforeText) await sendChunk(beforeText + "\n\n");
 
       const label = TOOL_LABELS[toolCall.tool] || toolCall.tool;
       const hint = toolCall.tool === "read_file" && (toolCall.start_line || toolCall.end_line)
@@ -1244,30 +1360,29 @@ Deno.serve(async (req: Request): Promise<Response> => {
             retriedResult = await executeTool(ctx, toolCall, targetBranch);
           } catch (e) { retriedResult = `工具执行出错：${(e as Error).message}`; }
         }
-        if (retriedResult !== toolResult) {
-          // 重试成功：用新结果替换
-          toolResult = retriedResult;
-          const retryFailed = toolResult.includes("出错") || toolResult.includes("失败");
-          // 若重试后仍失败，标记当前步骤为最终失败
-          if (retryFailed && currentStepId) {
-            await sendTyped({ type: "step_end", stepId: currentStepId, status: "error" });
-            if (sb && workflowDbId) {
-              await dbUpdateStep(sb, workflowDbId, currentStepId, {
-                status: "error", finished_at: new Date().toISOString(),
-              });
-              await dbFinishWorkflow(sb, workflowDbId);
-            }
-            currentStepId = null;
-            await sendChunk("\n\n⚠️ 步骤执行失败（已重试 2 次），终止任务。");
-            break;
+        // 无论原始是否相同，都使用最新的 retriedResult
+        toolResult = retriedResult;
+        const retryFailed = toolResult.includes("出错") || toolResult.includes("失败");
+        // 若重试后仍失败，标记当前步骤为最终失败
+        if (retryFailed && currentStepId) {
+          await sendTyped({ type: "step_end", stepId: currentStepId, status: "error" });
+          if (sb && workflowDbId) {
+            await dbUpdateStep(sb, workflowDbId, currentStepId, {
+              status: "error", finished_at: new Date().toISOString(),
+            });
+            await dbFinishWorkflow(sb, workflowDbId);
           }
+          currentStepId = null;
+          await sendChunk("\n\n⚠️ 步骤执行失败（已重试 2 次），终止任务。");
+          break;
         }
       }
 
-      fullMessages.push({ role: "assistant", content: assistantText });
+      // 将原始 assistantText（含 PLAN/STEP 标记）压入历史，保持上下文完整性
+      fullMessages.push({ role: "assistant", content: rawText });
       fullMessages.push({
         role: "user",
-        content: `工具执行结果：\n${toolResult}\n\n请根据结果继续执行下一步。若还有未完成的步骤，继续调用工具；若全部步骤已完成，输出简洁的完成总结。`,
+        content: `工具执行结果：\n${toolResult}\n\n请根据结果继续执行下一步。若还有未完成的步骤，继续调用工具；若全部步骤已完成，输出简洁的完成总结（不要再输出工具 JSON）。`,
       });
 
       if (round === MAX_ROUNDS - 1) {
@@ -1285,10 +1400,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
 
     if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
+    clearInterval(heartbeatTimer);
     await sendDone();
     } catch (fatalErr) {
       // 顶层兜底：未预期的异常，写入流后关闭，防止代理层因未处理的 rejection 返回 500
       console.error("[IIFE fatal]", (fatalErr as Error).message);
+      // @ts-ignore: heartbeatTimer is defined in outer scope
+      if (typeof heartbeatTimer !== 'undefined') clearInterval(heartbeatTimer);
       try { await sendChunk(`\n\n❌ 内部错误：${(fatalErr as Error).message}`); } catch { /* ignore */ }
       try { await sendDone(); } catch { /* ignore */ }
     }
