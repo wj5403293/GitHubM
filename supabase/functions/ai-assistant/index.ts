@@ -1164,7 +1164,7 @@ ${branchNote}
   3. grep_in_file 定位需要修改的具体行号
   4. patch_file 精确修改代码（优先于 write_file）
   5. create_pr 提交 PR → merge_pull_request 合并
-  6. **触发部署前必须检查**：read_file 读取 workflow 文件，确认 on: 块包含 `workflow_dispatch:`；
+  6. **触发部署前必须检查**：read_file 读取 workflow 文件，确认 on: 块包含 \`workflow_dispatch:\`；
      若缺少，先用 patch_file 添加，提交后再执行 trigger_workflow
   7. trigger_workflow 触发部署 → get_workflow_runs 轮询状态
 
@@ -1210,8 +1210,8 @@ ${branchNote}
   1. list_workflows 找到 workflow_id 及路径
   2. read_file 读取 .github/workflows/xxx.yml
   3. patch_file 精确修改触发条件/环境变量/步骤
-     **⚠️ 若需要用 trigger_workflow 触发，必须确保 on: 块含有 `workflow_dispatch:`**
-     若缺少，在此步同时添加：`workflow_dispatch: {}` 或带 inputs 的完整定义
+     **⚠️ 若需要用 trigger_workflow 触发，必须确保 on: 块含有 \`workflow_dispatch:\`**
+     若缺少，在此步同时添加：\`workflow_dispatch: {}\` 或带 inputs 的完整定义
   4. trigger_workflow 验证新工作流（仅在确认 workflow_dispatch 已存在后调用）
 
 📦 **缺失资源文件处理**：
@@ -1234,8 +1234,8 @@ ${branchNote}
 
   **步骤 3 — 推断下一个版本号（semver 规则）**
   按以下优先级判断（从高到低，匹配到即停）：
-  - 任意 PR 的 labels 含 `breaking` 或 `major` → **主版本 +1**，次版本和修订版归零
-  - 任意 PR 的 labels 含 `feature`/`feat`/`enhancement`，或标题以 `feat:` 开头 → **次版本 +1**，修订版归零
+  - 任意 PR 的 labels 含 \`breaking\` 或 \`major\` → **主版本 +1**，次版本和修订版归零
+  - 任意 PR 的 labels 含 \`feature\`/\`feat\`/\`enhancement\`，或标题以 \`feat:\` 开头 → **次版本 +1**，修订版归零
   - 其余情况（fix/chore/docs/ci/refactor/test 等）→ **修订版 +1**
   - 无上一个 Release → 固定使用 **v0.1.0**，不再推断
 
@@ -1268,7 +1268,7 @@ ${branchNote}
 
   ⚠️ **注意事项**：
   - 若 get_merged_prs_since 返回 prs 为空数组，主动告知用户"自上次发版以来暂无已合并 PR"，询问是否仍要继续发版（此时 changelog 正文可写"暂无变更"）
-  - tag_name 必须以 `v` 开头，格式 vX.Y.Z
+  - tag_name 必须以 \`v\` 开头，格式 vX.Y.Z
   - 不要在 create_release 前询问用户确认，直接执行
 
 ==============================
