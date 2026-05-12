@@ -1167,14 +1167,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
       trigger_workflow: "触发工作流", cancel_workflow_run: "取消运行",
       rerun_workflow_run: "重新运行", list_actions_secrets: "查看 Secrets",
     };
-    const MAX_ROUNDS = 15;
+    // 每批最多 20 轮工具调用；最多自动续跑 3 批，总上限 60 轮
+    const MAX_ROUNDS_PER_BATCH = 20;
+    const MAX_BATCHES = 3;
     // 当前正在执行的计划步骤 ID
     let currentStepId: string | null = null;
     // 连续"无工具调用"的 nudge 计数（最多纠正 2 次，防止死循环）
     let nudgeCount = 0;
     const MAX_NUDGE = 2;
+    // 总轮次计数（跨批次）
+    let totalRound = 0;
 
-    for (let round = 0; round < MAX_ROUNDS; round++) {
+    for (let batch = 0; batch < MAX_BATCHES; batch++) {
+    let batchDone = false; // 本批是否已完成（break 出内层循环）
+    for (let round = 0; round < MAX_ROUNDS_PER_BATCH; round++, totalRound++) {
       let assistantText = "";
       let thinkingStarted = false;
 
@@ -1192,6 +1198,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         if (thinkingStarted) await sendTyped({ type: "think_end" });
       } catch (e) {
         await sendChunk(`\n❌ AI 调用失败：${(e as Error).message}`);
+        batchDone = true;
         break;
       }
 
@@ -1200,8 +1207,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const rawText = assistantText;
       assistantText = stripCodeFences(assistantText);
 
-      // ── 首轮提取任务计划 ─────────────────────────────────────────────────────
-      if (round === 0) {
+      // ── 首轮（每批第 0 轮）提取任务计划 ─────────────────────────────────────
+      if (totalRound === 0) {
         const plan = extractPlan(rawText); // 使用原始文本（stripCodeFences 在内部处理）
         if (plan && plan.length > 0) {
           await sendTyped({ type: "plan", steps: plan });
@@ -1241,11 +1248,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const toolCall = extractToolCall(assistantText);
       if (!toolCall) {
         // ── Nudge 机制：任务进行中但 LLM 忘记输出工具 JSON ─────────────────────
-        // 判断条件：有步骤在执行（或 round=0 时刚给了 PLAN），且 nudge 未超限
-        const taskOngoing = currentStepId !== null || round === 0;
+        // 判断条件：有步骤在执行（或 totalRound=0 时刚给了 PLAN），且 nudge 未超限
+        const taskOngoing = currentStepId !== null || totalRound === 0;
         if (taskOngoing && nudgeCount < MAX_NUDGE) {
           nudgeCount++;
-          console.log(`[nudge ${nudgeCount}] round=${round} 无工具调用，注入纠正提示`);
+          console.log(`[nudge ${nudgeCount}] totalRound=${totalRound} 无工具调用，注入纠正提示`);
           // 保留 LLM 已输出的文字内容，再追加纠正指令
           const displayText = assistantText.replace(/\bPLAN\s*:\s*\{[\s\S]*?\}/i, "").trim();
           if (displayText) await sendChunk(displayText + "\n");
@@ -1270,6 +1277,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         // 持久化工作流完成
         if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
         await sendChunk(assistantText);
+        batchDone = true; // 任务已完成，退出外层批次循环
         break;
       }
 
@@ -1309,7 +1317,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
                           ? toolCall.paths
                           : toolCall.path || toolCall.query || toolCall.title || toolCall.branch || "";
       
-      const toolCallId = `tool-${Date.now()}-${round}`;
+      const toolCallId = `tool-${Date.now()}-${totalRound}`;
       await sendTyped({ 
         type: "tool_start", 
         id: toolCallId, 
@@ -1374,6 +1382,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
           }
           currentStepId = null;
           await sendChunk("\n\n⚠️ 步骤执行失败（已重试 2 次），终止任务。");
+          batchDone = true;
           break;
         }
       }
@@ -1385,19 +1394,39 @@ Deno.serve(async (req: Request): Promise<Response> => {
         content: `工具执行结果：\n${toolResult}\n\n请根据结果继续执行下一步。若还有未完成的步骤，继续调用工具；若全部步骤已完成，输出简洁的完成总结（不要再输出工具 JSON）。`,
       });
 
-      if (round === MAX_ROUNDS - 1) {
-        if (currentStepId) {
-          await sendTyped({ type: "step_end", stepId: currentStepId, status: "done" });
-          if (sb && workflowDbId) {
-            await dbUpdateStep(sb, workflowDbId, currentStepId, {
-              status: "done", finished_at: new Date().toISOString(),
-            });
+      // ── 本批次工具轮次耗尽：任务未完则自动续跑 ─────────────────────────────
+      if (round === MAX_ROUNDS_PER_BATCH - 1) {
+        const hasMoreBatches = batch < MAX_BATCHES - 1;
+        if (hasMoreBatches) {
+          // 任务仍在进行：发通知后注入续跑指令，进入下一批
+          console.log(`[auto-continue] batch=${batch} totalRound=${totalRound} 自动续跑`);
+          await sendChunk(`\n\n⏩ 已完成第 ${batch + 1} 批次（${totalRound + 1} 轮），任务继续执行...\n\n`);
+          // 注入系统提示：告知 AI 继续剩余步骤，不要重新规划
+          fullMessages.push({
+            role: "user",
+            content: "⚠️ 系统提示：由于任务较复杂，请继续执行剩余未完成的步骤。不要重新输出 PLAN，直接从下一个工具调用开始继续。",
+          });
+          nudgeCount = 0; // 新批次重置 nudge 计数
+          // batchDone 保持 false，外层 for 将进入下一个 batch
+        } else {
+          // 所有批次已耗尽
+          if (currentStepId) {
+            await sendTyped({ type: "step_end", stepId: currentStepId, status: "done" });
+            if (sb && workflowDbId) {
+              await dbUpdateStep(sb, workflowDbId, currentStepId, {
+                status: "done", finished_at: new Date().toISOString(),
+              });
+            }
           }
+          if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
+          await sendChunk(`\n\n⚠️ 已达到最大工具调用轮次（${totalRound + 1} 轮），任务可能未完全完成，请重新发送指令继续。`);
+          batchDone = true;
         }
-        if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
-        await sendChunk("\n\n⚠️ 已达到最大工具调用轮次。");
       }
-    }
+    } // end inner for
+
+    if (batchDone) break; // 内层正常完成（final answer / fatal error），退出外层
+    } // end outer for (batch)
 
     if (sb && workflowDbId) await dbFinishWorkflow(sb, workflowDbId);
     clearInterval(heartbeatTimer);
