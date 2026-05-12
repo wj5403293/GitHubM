@@ -1,4 +1,4 @@
-// AI 助手页面 v5 - 文件浏览器插件 + 气泡宽度修复
+// AI 助手页面 v6 - 任务工作流面板 + 自主执行引擎
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getRepoBranches } from '@/services/github';
@@ -10,7 +10,7 @@ import {
   Bot, User, Send, Square, Trash2, Settings,
   Sparkles, AlertCircle,
   RefreshCw, Plus, GitPullRequest, History, ArrowLeft, Loader2,
-  Zap, FolderSearch, PanelRight,
+  Zap, FolderSearch, PanelRight, Wrench, ListChecks, Clock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -23,13 +23,16 @@ import BranchPicker from '@/components/ai/BranchPicker';
 import CreateBranchDialog from '@/components/ai/CreateBranchDialog';
 import HistoryPanel from '@/components/ai/HistoryPanel';
 import FileBrowserPanel from '@/components/ai/FileBrowserPanel';
+import { ToolHistoryPanel } from '@/components/ai/ToolHistoryPanel';
+import { TaskPlanPanel, type StepStatus } from '@/components/ai/TaskPlanPanel';
+import WorkflowHistoryPanel from '@/components/ai/WorkflowHistoryPanel';
 // ── 共享工具层 ────────────────────────────────────────────────────────────────
 import {
   getModelDef, loadModelConfig, saveModelConfig,
-  parseChunk, renderMarkdown, QUICK_PROMPTS,
+  parseChunk, parseTypedChunk, renderMarkdown, ThinkingBlock, QUICK_PROMPTS,
 } from '@/components/ai/aiUtils';
 import { upsertSession, insertMessages } from '@/components/ai/aiSupabase';
-import type { Message, ModelConfig, ChatSession, ChatSessionMessage } from '@/components/ai/aiTypes';
+import type { Message, ModelConfig, ChatSession, ChatSessionMessage, ToolHistoryItem, TaskPlanStep } from '@/components/ai/aiTypes';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -48,6 +51,16 @@ export default function AiAssistantPage() {
   const [showCreateBranch, setShowCreateBranch] = useState(false);
   // 文件浏览器侧边面板
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  // 工具调用历史侧边面板
+  const [showToolHistory, setShowToolHistory] = useState(false);
+  const [toolHistory, setToolHistory] = useState<ToolHistoryItem[]>([]);
+  // 任务工作流面板
+  const [taskPlanSteps, setTaskPlanSteps] = useState<TaskPlanStep[]>([]);
+  const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>({});
+  const [stepRetryCounts, setStepRetryCounts] = useState<Record<string, number>>({});
+  const [currentStepId, setCurrentStepId] = useState<string | null>(null);
+  // 侧边面板 Tab：'tools' | 'plan' | 'history'
+  const [sidePanelTab, setSidePanelTab] = useState<'tools' | 'plan' | 'history'>('plan');
   // 当前会话 ID（用于持久化）
   const [sessionId, setSessionId] = useState<string | null>(null);
   // 待持久化消息队列（本轮对话新增的）
@@ -264,6 +277,18 @@ export default function AiAssistantPage() {
 
     abortRef.current = new AbortController();
     let accumulated = '';
+    let currentThinking = '';
+
+    // 发起新一轮对话前，如果是新问题，清空旧的工具记录
+    if (!isRegen) {
+      setToolHistory([]);
+      setShowToolHistory(false);
+      // 清空任务规划状态
+      setTaskPlanSteps([]);
+      setStepStatuses({});
+      setStepRetryCounts({});
+      setCurrentStepId(null);
+    }
 
     await sendStreamRequest({
       functionUrl: `${SUPABASE_URL}/functions/v1/ai-assistant`,
@@ -274,13 +299,72 @@ export default function AiAssistantPage() {
         repo: selectedRepo.name,
         target_branch: selectedBranch,
         model_config: modelConfig,
+        user_id: user?.login || 'anonymous',
       },
       supabaseAnonKey: SUPABASE_ANON_KEY,
       onData: (data) => {
-        const chunk = parseChunk(data);
+        const chunk = parseTypedChunk(data);
         if (!chunk) return;
-        accumulated += chunk;
-        setMessages(prev => prev.map(m => m.id === aiMsg.id ? { ...m, content: accumulated } : m));
+
+        switch (chunk.type) {
+          case 'content':
+            accumulated += chunk.content;
+            setMessages(prev => prev.map(m => m.id === aiMsg.id ? { ...m, content: accumulated } : m));
+            break;
+          case 'think_start':
+            currentThinking = '';
+            setMessages(prev => prev.map(m => m.id === aiMsg.id ? { ...m, thinkingContent: '', thinkingDone: false } : m));
+            break;
+          case 'think_chunk':
+            currentThinking += chunk.content;
+            setMessages(prev => prev.map(m => m.id === aiMsg.id ? { ...m, thinkingContent: currentThinking } : m));
+            break;
+          case 'think_end':
+            setMessages(prev => prev.map(m => m.id === aiMsg.id ? { ...m, thinkingDone: true } : m));
+            break;
+          case 'tool_start':
+            setToolHistory(prev => [...prev, {
+              id: chunk.id,
+              tool: chunk.tool,
+              label: chunk.label,
+              hint: chunk.hint,
+              status: 'running',
+              startedAt: Date.now()
+            }]);
+            setShowToolHistory(true); // 自动展开工具面板
+            break;
+          case 'tool_end':
+            setToolHistory(prev => prev.map(item => item.id === chunk.id ? {
+              ...item,
+              status: chunk.status,
+              result: chunk.result,
+              elapsedMs: chunk.elapsedMs
+            } : item));
+            break;
+          case 'plan':
+            // 收到任务计划：初始化所有步骤为 pending，自动切换到计划 Tab
+            setTaskPlanSteps(chunk.steps);
+            setStepStatuses(Object.fromEntries(chunk.steps.map(s => [s.id, 'pending' as StepStatus])));
+            setStepRetryCounts({});
+            setCurrentStepId(null);
+            setSidePanelTab('plan');
+            setShowToolHistory(true); // 展开侧边面板
+            break;
+          case 'step_start':
+            setCurrentStepId(chunk.stepId);
+            setStepStatuses(prev => ({ ...prev, [chunk.stepId]: 'running' }));
+            break;
+          case 'step_retry':
+            // 重试中：维持 running 状态，更新重试计数
+            setStepStatuses(prev => ({ ...prev, [chunk.stepId]: 'running' }));
+            setStepRetryCounts(prev => ({ ...prev, [chunk.stepId]: chunk.retryCount }));
+            setCurrentStepId(chunk.stepId);
+            break;
+          case 'step_end':
+            setStepStatuses(prev => ({ ...prev, [chunk.stepId]: chunk.status === 'error' ? 'error' : 'done' }));
+            if (chunk.status !== 'error') setCurrentStepId(null);
+            break;
+        }
       },
       onComplete: async () => {
         setMessages(prev => prev.map(m => m.id === aiMsg.id ? { ...m, streaming: false } : m));
@@ -473,6 +557,21 @@ export default function AiAssistantPage() {
           >
             <FolderSearch className="w-3.5 h-3.5" />
           </button>
+          <button
+            onClick={() => setShowToolHistory(v => !v)}
+            className={cn(
+              'p-1.5 rounded-md transition-colors relative',
+              showToolHistory
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+            )}
+            title={showToolHistory ? '关闭侧边面板' : '打开侧边面板'}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            {(toolHistory.length > 0 || taskPlanSteps.length > 0) && !showToolHistory && (
+              <span className="absolute top-0 right-0 w-2 h-2 bg-primary rounded-full border border-background" />
+            )}
+          </button>
         </div>
       </div>
 
@@ -539,6 +638,11 @@ export default function AiAssistantPage() {
                           ? <p className="whitespace-pre-wrap break-words break-all">{msg.content}</p>
                           : (
                             <div className="min-w-0">
+                              {/* 思考过程显示 */}
+                              {(msg.thinkingContent || (msg.streaming && !msg.thinkingDone)) && (
+                                <ThinkingBlock content={msg.thinkingContent || ''} done={msg.thinkingDone} />
+                              )}
+                              
                               {msg.content ? renderMarkdown(msg.content) : (
                                 msg.streaming
                                   ? <span className="inline-block w-1.5 h-4 bg-primary animate-pulse rounded-sm align-middle" />
@@ -718,6 +822,81 @@ export default function AiAssistantPage() {
               onInsert={handleFileBrowserInsert}
               onClose={() => setShowFileBrowser(false)}
             />
+          </div>
+        )}
+
+        {/* ── 工具调用 & 任务计划 侧边面板（Tab 切换） ── */}
+        {showToolHistory && (
+          <div className="w-64 shrink-0 min-h-0 flex flex-col overflow-hidden border-l border-border">
+            {/* Tab 标签行 */}
+            <div className="flex items-stretch border-b border-border shrink-0 bg-muted/20">
+              <button
+                onClick={() => setSidePanelTab('plan')}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors relative',
+                  sidePanelTab === 'plan'
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <ListChecks className="w-3.5 h-3.5 shrink-0" />
+                任务计划
+                {taskPlanSteps.length > 0 && (
+                  <span className="text-[9px] font-mono bg-primary/10 text-primary px-1 rounded">
+                    {taskPlanSteps.length}
+                  </span>
+                )}
+                {sidePanelTab === 'plan' && (
+                  <span className="absolute bottom-0 left-2 right-2 h-[2px] bg-primary rounded-t" />
+                )}
+              </button>
+              <button
+                onClick={() => setSidePanelTab('tools')}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-medium transition-colors relative',
+                  sidePanelTab === 'tools'
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Wrench className="w-3.5 h-3.5 shrink-0" />
+                工具历史
+                {toolHistory.length > 0 && (
+                  <span className="text-[9px] font-mono bg-muted text-muted-foreground px-1 rounded">
+                    {toolHistory.length}
+                  </span>
+                )}
+                {sidePanelTab === 'tools' && (
+                  <span className="absolute bottom-0 left-2 right-2 h-[2px] bg-primary rounded-t" />
+                )}
+              </button>
+              {/* 关闭按钮 */}
+              <button
+                onClick={() => setShowToolHistory(false)}
+                className="px-2 text-muted-foreground hover:text-foreground transition-colors"
+                title="关闭面板"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                  <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+
+            {/* Tab 内容 */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {sidePanelTab === 'plan' ? (
+                <TaskPlanPanel
+                  steps={taskPlanSteps}
+                  stepStatuses={stepStatuses}
+                  stepRetryCounts={stepRetryCounts}
+                  currentStepId={currentStepId}
+                />
+              ) : sidePanelTab === 'history' ? (
+                <WorkflowHistoryPanel userId={user?.login ?? 'anonymous'} />
+              ) : (
+                <ToolHistoryPanel items={toolHistory} />
+              )}
+            </div>
           </div>
         )}
       </div>
