@@ -512,7 +512,49 @@ async function triggerWorkflow(
       { method: "POST", body: JSON.stringify({ ref, inputs: inputs || {} }) },
     );
     return `✅ 已触发工作流 \`${workflowId}\`，分支/标签：\`${ref}\`。稍后可用 get_workflow_runs 查看进度。`;
-  } catch (e) { return `触发工作流失败：${(e as Error).message}`; }
+  } catch (e) {
+    const msg = (e as Error).message;
+    // 422: 工作流没有 workflow_dispatch 触发器 —— 自动诊断并给出修复方案
+    if (msg.includes("422") && msg.includes("workflow_dispatch")) {
+      // 尝试推断工作流文件路径
+      const workflowPath = workflowId.includes("/")
+        ? workflowId
+        : `.github/workflows/${workflowId}`;
+      let currentTriggers = "（无法读取工作流文件）";
+      try {
+        const data = await githubRequest(
+          ctx,
+          `/repos/${ctx.owner}/${ctx.repo}/contents/${workflowPath}`,
+        );
+        if (data.encoding === "base64") {
+          const content = decodeBase64Utf8(data.content);
+          // 提取 on: 块的前 20 行，帮助 AI 了解现有触发器
+          const onSection = content
+            .split("\n")
+            .slice(0, 30)
+            .filter((l: string) => /^\s*(on:|push:|pull_request:|schedule:|workflow_call:)/.test(l))
+            .join("\n");
+          currentTriggers = onSection || "（on: 块未找到，请用 read_file 读取完整文件）";
+        }
+      } catch (_) { /* 读取失败不影响主错误提示 */ }
+      return [
+        `❌ trigger_workflow 失败：工作流 \`${workflowId}\` 没有 \`workflow_dispatch\` 触发器。`,
+        ``,
+        `**当前触发器（检测到）：**`,
+        `\`\`\`yaml`,
+        currentTriggers,
+        `\`\`\``,
+        ``,
+        `**必须先修复工作流文件**，在 \`on:\` 块中添加 \`workflow_dispatch:\`，然后再重试触发：`,
+        ``,
+        `修复步骤：`,
+        `1. read_file 读取 \`${workflowPath}\` 确认完整 on: 块`,
+        `2. patch_file 在 on: 块中追加 \`workflow_dispatch: {}\` 或带 inputs 的完整定义`,
+        `3. 提交修改后再次调用 trigger_workflow`,
+      ].join("\n");
+    }
+    return `触发工作流失败：${msg}`;
+  }
 }
 
 /** 取消正在运行的工作流 */
@@ -726,7 +768,9 @@ ${branchNote}
   3. grep_in_file 定位需要修改的具体行号
   4. patch_file 精确修改代码（优先于 write_file）
   5. create_pr 提交 PR → merge_pull_request 合并
-  6. trigger_workflow 触发部署 → get_workflow_runs 轮询状态
+  6. **触发部署前必须检查**：read_file 读取 workflow 文件，确认 on: 块包含 `workflow_dispatch:`；
+     若缺少，先用 patch_file 添加，提交后再执行 trigger_workflow
+  7. trigger_workflow 触发部署 → get_workflow_runs 轮询状态
 
 🔍 **排查构建/部署失败（自动修复工作流）**：
   遇到用户提到"构建失败"、"部署报错"、"CI 挂了"等情况，**必须**按此流程自主完成全链路修复，无需询问用户：
@@ -770,7 +814,9 @@ ${branchNote}
   1. list_workflows 找到 workflow_id 及路径
   2. read_file 读取 .github/workflows/xxx.yml
   3. patch_file 精确修改触发条件/环境变量/步骤
-  4. trigger_workflow 验证新工作流
+     **⚠️ 若需要用 trigger_workflow 触发，必须确保 on: 块含有 `workflow_dispatch:`**
+     若缺少，在此步同时添加：`workflow_dispatch: {}` 或带 inputs 的完整定义
+  4. trigger_workflow 验证新工作流（仅在确认 workflow_dispatch 已存在后调用）
 
 📦 **缺失资源文件处理**：
   当项目中缺少图片、图标、证书等二进制资源时：
@@ -792,6 +838,8 @@ ${branchNote}
 - 查看日志时先用 get_run_jobs 找到失败 Job ID，再用 get_job_logs 获取日志
 - patch_file 比 write_file 更安全，修改工作流文件时优先使用 patch
 - 修改前必须先用 grep_in_file 或 read_file 确认精确的行号
+- **调用 trigger_workflow 前，必须先确认工作流文件的 on: 块含有 `workflow_dispatch:`**
+  若缺少，先 patch_file 添加再触发；否则会 422 报错
 - commit message 使用中文，遵循 Conventional Commits（fix/feat/ci/chore/docs）
 - 对话语言：中文；操作完成后给出简洁总结
 
