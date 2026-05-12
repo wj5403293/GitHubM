@@ -47,6 +47,28 @@ export interface InlineStep {
   retryCount?: number;
 }
 
+/** 用户上传的附件（图片或文本文件） */
+export interface Attachment {
+  id: string;
+  name: string;
+  /** 'image' = 图片（base64 预览）| 'text' = 代码/文本文件 | 'binary' = 其他二进制 */
+  type: 'image' | 'text' | 'binary';
+  mimeType: string;
+  /** 图片：base64 data URL；文本文件：原始文本内容；binary：base64 */
+  content: string;
+  size: number;
+}
+
+/** AI 发出的文件上传请求 */
+export interface FileRequest {
+  id: string;
+  filename: string;
+  description: string;
+  mime_types?: string;
+  /** 用户已完成上传，卡片变为已处理状态 */
+  fulfilled?: boolean;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -61,6 +83,10 @@ export interface Message {
   inlinePlan?: InlineStep[];
   /** 内联工具调用列表（气泡内展示，移动端可见） */
   inlineTools?: InlineTool[];
+  /** 用户消息携带的附件 */
+  attachments?: Attachment[];
+  /** AI 发出的文件上传请求列表 */
+  fileRequests?: FileRequest[];
 }// ── 工具调用记录类型 ────────────────────────────────────────────────────────────
 
 export interface ToolHistoryItem {
@@ -95,7 +121,8 @@ export type SSEChunk =
   | { type: 'step_retry'; stepId: string; retryCount: number }
   | { type: 'heartbeat' }
   | { type: 'status_info'; message: string }
-  | { type: 'status_warning'; message: string };
+  | { type: 'status_warning'; message: string }
+  | { type: 'file_request'; id: string; filename: string; description: string; mime_types?: string };
 
 // ── 模型配置 ────────────────────────────────────────────────────────────────────
 
