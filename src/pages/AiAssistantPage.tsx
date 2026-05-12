@@ -26,13 +26,14 @@ import FileBrowserPanel from '@/components/ai/FileBrowserPanel';
 import { ToolHistoryPanel } from '@/components/ai/ToolHistoryPanel';
 import { TaskPlanPanel, type StepStatus } from '@/components/ai/TaskPlanPanel';
 import WorkflowHistoryPanel from '@/components/ai/WorkflowHistoryPanel';
+import InlineActivityPanel from '@/components/ai/InlineActivityPanel';
 // ── 共享工具层 ────────────────────────────────────────────────────────────────
 import {
   getModelDef, loadModelConfig, saveModelConfig,
   parseChunk, parseTypedChunk, renderMarkdown, ThinkingBlock, QUICK_PROMPTS,
 } from '@/components/ai/aiUtils';
 import { upsertSession, insertMessages } from '@/components/ai/aiSupabase';
-import type { Message, ModelConfig, ChatSession, ChatSessionMessage, ToolHistoryItem, TaskPlanStep } from '@/components/ai/aiTypes';
+import type { Message, ModelConfig, ChatSession, ChatSessionMessage, ToolHistoryItem, TaskPlanStep, InlineStep, InlineTool } from '@/components/ai/aiTypes';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -332,6 +333,16 @@ export default function AiAssistantPage() {
               startedAt: Date.now()
             }]);
             setShowToolHistory(true); // 自动展开工具面板
+            // ── 同步写入气泡内联 ──
+            setMessages(prev => prev.map(m => {
+              if (m.id !== aiMsg.id) return m;
+              const newTool: InlineTool = {
+                id: chunk.id, tool: chunk.tool,
+                label: chunk.label, hint: chunk.hint,
+                status: 'running',
+              };
+              return { ...m, inlineTools: [...(m.inlineTools ?? []), newTool] };
+            }));
             break;
           case 'tool_end':
             setToolHistory(prev => prev.map(item => item.id === chunk.id ? {
@@ -340,6 +351,18 @@ export default function AiAssistantPage() {
               result: chunk.result,
               elapsedMs: chunk.elapsedMs
             } : item));
+            // ── 同步写入气泡内联 ──
+            setMessages(prev => prev.map(m => {
+              if (m.id !== aiMsg.id) return m;
+              return {
+                ...m,
+                inlineTools: (m.inlineTools ?? []).map(t =>
+                  t.id === chunk.id
+                    ? { ...t, status: chunk.status, result: chunk.result, elapsedMs: chunk.elapsedMs }
+                    : t
+                ),
+              };
+            }));
             break;
           case 'plan':
             // 收到任务计划：初始化所有步骤为 pending，自动切换到计划 Tab
@@ -349,20 +372,60 @@ export default function AiAssistantPage() {
             setCurrentStepId(null);
             setSidePanelTab('plan');
             setShowToolHistory(true); // 展开侧边面板
+            // ── 同步写入气泡内联 ──
+            setMessages(prev => prev.map(m => {
+              if (m.id !== aiMsg.id) return m;
+              const inlinePlan: InlineStep[] = chunk.steps.map(s => ({
+                id: s.id, title: s.title, desc: s.desc, status: 'pending',
+              }));
+              return { ...m, inlinePlan };
+            }));
             break;
           case 'step_start':
             setCurrentStepId(chunk.stepId);
             setStepStatuses(prev => ({ ...prev, [chunk.stepId]: 'running' }));
+            // ── 同步写入气泡内联 ──
+            setMessages(prev => prev.map(m => {
+              if (m.id !== aiMsg.id) return m;
+              return {
+                ...m,
+                inlinePlan: (m.inlinePlan ?? []).map(s =>
+                  s.id === chunk.stepId ? { ...s, status: 'running' } : s
+                ),
+              };
+            }));
             break;
           case 'step_retry':
             // 重试中：维持 running 状态，更新重试计数
             setStepStatuses(prev => ({ ...prev, [chunk.stepId]: 'running' }));
             setStepRetryCounts(prev => ({ ...prev, [chunk.stepId]: chunk.retryCount }));
             setCurrentStepId(chunk.stepId);
+            // ── 同步写入气泡内联 ──
+            setMessages(prev => prev.map(m => {
+              if (m.id !== aiMsg.id) return m;
+              return {
+                ...m,
+                inlinePlan: (m.inlinePlan ?? []).map(s =>
+                  s.id === chunk.stepId ? { ...s, status: 'running', retryCount: chunk.retryCount } : s
+                ),
+              };
+            }));
             break;
           case 'step_end':
             setStepStatuses(prev => ({ ...prev, [chunk.stepId]: chunk.status === 'error' ? 'error' : 'done' }));
             if (chunk.status !== 'error') setCurrentStepId(null);
+            // ── 同步写入气泡内联 ──
+            setMessages(prev => prev.map(m => {
+              if (m.id !== aiMsg.id) return m;
+              return {
+                ...m,
+                inlinePlan: (m.inlinePlan ?? []).map(s =>
+                  s.id === chunk.stepId
+                    ? { ...s, status: chunk.status === 'error' ? 'error' : 'done' }
+                    : s
+                ),
+              };
+            }));
             break;
         }
       },
@@ -642,7 +705,14 @@ export default function AiAssistantPage() {
                               {(msg.thinkingContent || (msg.streaming && !msg.thinkingDone)) && (
                                 <ThinkingBlock content={msg.thinkingContent || ''} done={msg.thinkingDone} />
                               )}
-                              
+                              {/* 内联任务进度（气泡内，移动端/桌面端均显示） */}
+                              {(msg.inlinePlan || msg.inlineTools) && (
+                                <InlineActivityPanel
+                                  inlinePlan={msg.inlinePlan}
+                                  inlineTools={msg.inlineTools}
+                                  streaming={msg.streaming}
+                                />
+                              )}
                               {msg.content ? renderMarkdown(msg.content) : (
                                 msg.streaming
                                   ? <span className="inline-block w-1.5 h-4 bg-primary animate-pulse rounded-sm align-middle" />
