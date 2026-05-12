@@ -37,6 +37,9 @@ import type { Message, ModelConfig, ChatSession, ChatSessionMessage, ToolHistory
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+console.log('[DEBUG] SUPABASE_URL:', SUPABASE_URL);
+console.log('[DEBUG] SUPABASE_ANON_KEY exists:', !!SUPABASE_ANON_KEY);
 // ── 主组件 ────────────────────────────────────────────────────────────────────
 
 export default function AiAssistantPage() {
@@ -440,6 +443,7 @@ export default function AiAssistantPage() {
         pendingMsgsRef.current = [];
       },
       onError: (err) => {
+        console.error('[DEBUG] SSE Error:', err);
         setMessages(prev => prev.map(m =>
           m.id === aiMsg.id ? { ...m, content: `❌ 请求失败：${err.message}`, streaming: false } : m
         ));
