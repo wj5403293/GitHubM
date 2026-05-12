@@ -1215,13 +1215,20 @@ Deno.serve(async (req: Request): Promise<Response> => {
           if (thinkingStarted) await sendTyped({ type: "think_end" });
           break; // 成功
         } catch (e) {
+          const errMsg = (e as Error).message;
+          const isAuthErr = /401|403|unauthorized|forbidden/i.test(errMsg);
+          if (isAuthErr) {
+            await sendChunk(`\n🔒 认证失败：${errMsg.slice(0, 150)}`);
+            batchDone = true;
+            break;
+          }
           llmRetry++;
           if (llmRetry < MAX_LLM_RETRIES) {
-            await sendChunk(`\n⚠️ AI 调用失败（${(e as Error).message.slice(0, 100)}），${llmRetry}/${MAX_LLM_RETRIES} 次重试...`);
+            await sendChunk(`\n⚠️ AI 调用失败（${errMsg.slice(0, 100)}），${llmRetry}/${MAX_LLM_RETRIES} 次重试...`);
             await new Promise(res => setTimeout(res, llmRetry * 2000));
             continue;
           }
-          await sendChunk(`\n❌ AI 调用失败（已重试 ${MAX_LLM_RETRIES} 次）：${(e as Error).message}`);
+          await sendChunk(`\n❌ AI 调用失败（已重试 ${MAX_LLM_RETRIES} 次）：${errMsg}`);
           batchDone = true;
           break;
         }
