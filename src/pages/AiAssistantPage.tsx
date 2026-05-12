@@ -38,6 +38,11 @@ import type { Message, ModelConfig, ChatSession, ChatSessionMessage, ToolHistory
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
+if (typeof window !== 'undefined') {
+  (window as any)._SUPABASE_URL = SUPABASE_URL;
+  (window as any)._SUPABASE_ANON_KEY = !!SUPABASE_ANON_KEY;
+}
+
 console.log('[DEBUG] SUPABASE_URL:', SUPABASE_URL);
 console.log('[DEBUG] SUPABASE_ANON_KEY exists:', !!SUPABASE_ANON_KEY);
 // ── 主组件 ────────────────────────────────────────────────────────────────────
