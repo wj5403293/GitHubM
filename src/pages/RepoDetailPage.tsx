@@ -6,6 +6,7 @@ import {
   Star,
   GitFork,
   AlertCircle,
+  AlertTriangle,
   GitPullRequest,
   GitBranch,
   Users,
@@ -207,13 +208,13 @@ export default function RepoDetailPage() {
   // 删除仓库
   const handleDeleteRepo = async () => {
     if (!owner || !repoName) return;
-    if (deleteConfirmName !== `${owner}/${repoName}`) { toast.error(i18n.t('仓库名称输入不正确')); return; }
+    if (deleteConfirmName !== repoName) { toast.error(i18n.t('仓库名称不一致')); return; }
     setDeleting(true);
     try {
       await deleteRepo(owner, repoName);
       pageCache.delete(`repodetail:${owner}/${repoName}`);
       pageCache.invalidate('repos:'); // 使仓库列表缓存失效
-      toast.success(i18n.t('仓库已删除'));
+      toast.success(`已删除仓库 ${repoName}`);
       navigate('/repos');
     } catch (err) { toast.error(err instanceof Error ? err.message : i18n.t('删除失败')); }
     finally { setDeleting(false); }
@@ -650,21 +651,25 @@ export default function RepoDetailPage() {
 
       {/* ── 删除仓库确认对话框（仅 owner 可触发） ── */}
       {isOwner && (
-        <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => { if (!open) setDeleteDialogOpen(false); }}>
+        <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => { if (!open) { setDeleteDialogOpen(false); setDeleteConfirmName(''); } }}>
           <AlertDialogContent className="max-w-[calc(100%-2rem)] md:max-w-lg bg-card border-border">
             <AlertDialogHeader>
               <AlertDialogTitle className="text-foreground flex items-center gap-2">
-                <Trash2 className="w-4 h-4 text-destructive" />{i18n.t('删除仓库')}</AlertDialogTitle>
-              <AlertDialogDescription className="text-muted-foreground">
-                {i18n.t('此操作将永久删除仓库及其所有数据，不可撤销。')}</AlertDialogDescription>
+                <AlertTriangle className="w-4 h-4 text-destructive" />{i18n.t('删除仓库')}</AlertDialogTitle>
+              <AlertDialogDescription className="text-muted-foreground text-sm space-y-2">
+                <span>{i18n.t('此操作将永久删除')}</span>
+                <code className="font-mono text-foreground bg-secondary px-1.5 py-0.5 rounded text-xs">{`${owner}/${repoName}`}</code>
+                <span>{i18n.t('，包括所有代码、Issues、PR 等，且不可恢复。')}</span>
+              </AlertDialogDescription>
             </AlertDialogHeader>
             <div className="px-1 py-2 space-y-1.5">
-              <Label className="text-sm font-normal text-foreground">{i18n.t('请输入仓库完整名称以确认删除：')}</Label>
-              <Input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={`${owner}/${repoName}`} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground font-mono" />
+              <Label className="text-sm font-normal text-foreground">
+                {i18n.t('请输入仓库名称')}<code className="font-mono bg-secondary px-1 rounded text-xs">{repoName}</code> {i18n.t('确认删除')}</Label>
+              <Input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={repoName ?? ''} className="bg-secondary border-border text-foreground placeholder:text-muted-foreground font-mono" />
             </div>
             <AlertDialogFooter>
-              <AlertDialogCancel className="border-border hover:bg-secondary" onClick={() => setDeleteDialogOpen(false)}>{i18n.t('取消')}</AlertDialogCancel>
-              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleDeleteRepo} disabled={deleting || deleteConfirmName !== `${owner}/${repoName}`}>
+              <AlertDialogCancel className="border-border hover:bg-secondary" onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmName(''); }}>{i18n.t('取消')}</AlertDialogCancel>
+              <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={handleDeleteRepo} disabled={deleting || deleteConfirmName !== repoName}>
                 {deleting ? i18n.t('删除中...') : i18n.t('确认删除')}
               </AlertDialogAction>
             </AlertDialogFooter>
