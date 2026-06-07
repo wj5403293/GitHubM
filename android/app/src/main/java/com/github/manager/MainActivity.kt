@@ -2,12 +2,9 @@ package com.github.manager
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -91,7 +88,7 @@ class MainActivity : AppCompatActivity() {
     /** 当前是否为深色模式（用于 notifyAccent 确定未选中色；默认浅色） */
     private var darkTheme: Boolean = false
     /** 广播接收器是否已注册（防止 onDestroy 中 unregisterReceiver 二次崩溃） */
-    private var isReceiverRegistered: Boolean = false
+
 
     // ── 文件上传 ────────────────────────────────────────────────────
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
@@ -152,43 +149,12 @@ class MainActivity : AppCompatActivity() {
         pendingDownloadUrl = ""; pendingDownloadFileName = ""; pendingDownloadToken = ""
     }
 
-    // ── 下载完成广播 ────────────────────────────────────────────────
-    private val downloadReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val ctx = context ?: return
+    // ── 通知权限 ────────────────────────────────────────────────
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
             Toast.makeText(this, "通知权限已授予", Toast.LENGTH_SHORT).show()
-        }
-    }
-            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: return
-            if (id == -1L) return
-
-            val dm = ctx.getSystemService(DOWNLOAD_SERVICE) as? DownloadManager ?: return
-            val cursor = dm.query(DownloadManager.Query().setFilterById(id))
-            cursor?.use { c ->
-                if (!c.moveToFirst()) return
-                val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                    Toast.makeText(ctx, "✓ 文件已下载完成，保存至「下载」文件夹", Toast.LENGTH_SHORT).show()
-                } else {
-                    val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                    val msg = when (reason) {
-                        DownloadManager.ERROR_INSUFFICIENT_SPACE      -> "存储空间不足"
-                        DownloadManager.ERROR_HTTP_DATA_ERROR          -> "数据传输错误"
-                        DownloadManager.ERROR_UNHANDLED_HTTP_CODE      -> "服务器返回错误"
-                        DownloadManager.ERROR_CANNOT_RESUME            -> "无法续传，请重试"
-                        DownloadManager.ERROR_FILE_ALREADY_EXISTS      -> "文件已存在"
-                        DownloadManager.ERROR_TOO_MANY_REDIRECTS       -> "重定向次数过多"
-                        403                                            -> "权限不足（403），请检查 Token"
-                        404                                            -> "资源不存在（404）"
-                        else -> "下载失败（错误码 $reason）"
-                    }
-                    Toast.makeText(ctx, "❌ $msg", Toast.LENGTH_LONG).show()
-                }
-            }
         }
     }
 
@@ -691,7 +657,7 @@ class MainActivity : AppCompatActivity() {
             webView.loadUrl("file:///android_asset/index.html")
         }
 
-        registerDownloadReceiver()
+
         setupBottomNav()
 
         // 使用 OnBackPressedDispatcher 替代废弃的 onBackPressed，兼容 Android 13+ 预测性返回手势
@@ -727,11 +693,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         splashHandler.removeCallbacksAndMessages(null)
-        // 仅在已注册时注销，防止 onCreate 提前崩溃时 onDestroy 二次抛出 IllegalArgumentException
-        if (isReceiverRegistered) {
-            try { unregisterReceiver(downloadReceiver) } catch (_: Exception) {}
-            isReceiverRegistered = false
-        }
         // webView 为 lateinit，若 onCreate 未完成初始化需防止 NPE
         if (::webView.isInitialized) {
             webView.stopLoading()
@@ -1206,12 +1167,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 核心修复：先在后台线程解析 GitHub 下载链接的最终 URL，再交给 DownloadManager。
-     *
-     * 问题根因：
-        }
-    }
+
 
     // ── 文件选择辅助 ────────────────────────────────────────────────
 
@@ -1259,16 +1215,5 @@ class MainActivity : AppCompatActivity() {
         }
     }.getOrNull()
 
-    // ── 广播 ────────────────────────────────────────────────────────
 
-    private fun registerDownloadReceiver() {
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(downloadReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(downloadReceiver, filter)
-        }
-        isReceiverRegistered = true
-    }
 }
