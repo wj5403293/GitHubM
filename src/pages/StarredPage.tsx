@@ -233,7 +233,6 @@ export default function StarredPage() {
                           : <Globe className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                         }
                         <span className="text-sm font-semibold text-accent group-hover:underline truncate">
-                          {repoOwner !== '' && <span className="text-muted-foreground font-normal">{repoOwner}/</span>}
                           {repo.name}
                         </span>
                         {repo.fork && (

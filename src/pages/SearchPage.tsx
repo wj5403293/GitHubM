@@ -537,7 +537,7 @@ export default function SearchPage() {
                       <BookOpen className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
                       <div className="flex-1 min-w-0">
                         <span className="text-sm font-medium text-accent group-hover:underline">
-                          {repo.full_name}
+                          {repo.name}
                         </span>
                         {repo.description && (
                           <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 text-pretty">{repo.description}</p>
